@@ -2,3 +2,4 @@
 //! because it runs the whole program.
 
 pub mod init;
+pub mod install;
