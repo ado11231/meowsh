@@ -2,7 +2,9 @@
 //! `cat` or `art`.
 //!
 //! * `escape`: named terminal codes.
+//! * `pty`: opens the PTY and starts the shell in it, or starts the shell directly.
 //! * `raw`: the real terminal's raw mode, size, name, and signals.
 
 pub mod escape;
+pub mod pty;
 pub mod raw;
