@@ -4,6 +4,7 @@ use super::events::{Event, start_input_thread, start_output_thread, start_resize
 use super::{TerminationSignal, catch_panic};
 use crate::env::MEOWSH_TTY;
 use crate::term::bar::{BarGuard, Layout};
+use crate::term::filter::OutputFilter;
 use crate::term::pty::{ShellGuard, open_pty, resize_pty, spawn_shell};
 use crate::term::raw;
 use anyhow::{Context, Result};
@@ -80,6 +81,7 @@ impl Session {
         let mut resize_guard = start_resize_thread(self.signals, sender.clone())?;
         let master = self.master;
         let mut bar = self.bar;
+        let filter = OutputFilter::new(bar.layout());
 
         forward_session(
             self.reader,
@@ -87,13 +89,15 @@ impl Session {
             sender,
             receiver,
             std::io::stdout(),
+            filter,
             |output| {
                 let size = raw::read_size()?;
                 let layout = Layout::new(size.rows);
                 // Share the rows before the shell hears of the new size, so its redraw
                 // lands above the bar.
                 bar.resize(layout, output)?;
-                resize_pty(master.as_ref(), layout.shell_size(size))
+                resize_pty(master.as_ref(), layout.shell_size(size))?;
+                Ok(layout)
             },
         )?;
 
@@ -116,39 +120,49 @@ fn forward_session<W: Write>(
     sender: SyncSender<Event>,
     receiver: Receiver<Event>,
     output: W,
-    resize: impl FnMut(&mut W) -> Result<()>,
+    filter: OutputFilter,
+    resize: impl FnMut(&mut W) -> Result<Layout>,
 ) -> Result<()> {
     // The input thread may stay blocked on stdin, so it is not joined.
     let _input_thread = start_input_thread(writer, sender.clone())?;
     let output_thread = start_output_thread(reader, sender)?;
     // Owning the receiver here closes the queue before the resize cleanup, on any error.
-    forward_events(receiver, output, resize)?;
+    forward_events(receiver, output, filter, resize)?;
     output_thread
         .join()
         .map_err(|_| anyhow::anyhow!("shell output thread panicked"))
 }
 
 /// The main loop: handles events until shell output ends or a helper thread fails.
+///
+/// Shell output passes through `filter` on its way out. `resize` shares the rows again after
+/// the window changed size and returns the new layout.
 pub fn forward_events<W: Write>(
     receiver: Receiver<Event>,
     mut output: W,
-    mut resize: impl FnMut(&mut W) -> Result<()>,
+    mut filter: OutputFilter,
+    mut resize: impl FnMut(&mut W) -> Result<Layout>,
 ) -> Result<()> {
+    // Kept between events, so it is not allocated again for every piece of output.
+    let mut filtered = Vec::new();
     loop {
         let event = receiver
             .recv()
             .context("session event queue closed unexpectedly")?;
         match event {
             Event::Output(bytes) => {
+                filtered.clear();
+                filter.filter(&bytes, &mut filtered);
                 output
-                    .write_all(&bytes)
+                    .write_all(&filtered)
                     .context("could not write shell output")?;
                 output.flush().context("could not flush shell output")?;
             }
             Event::InputFinished(result) => result?,
             Event::OutputFinished(result) => return result,
             Event::Resized => {
-                catch_panic("resize handler panicked", || resize(&mut output))?;
+                let layout = catch_panic("resize handler panicked", || resize(&mut output))?;
+                filter.set_layout(layout);
             }
             Event::ResizeFailed(error) => return Err(error),
             Event::Terminated(signal) => return Err(TerminationSignal(signal).into()),
@@ -156,10 +170,27 @@ pub fn forward_events<W: Write>(
     }
 }
 
+/// How tall the main loop tests pretend the window is.
+#[cfg(test)]
+const TEST_WINDOW_ROWS: u16 = 24;
+
+/// A filter for the main loop tests, with the bar on.
+#[cfg(test)]
+pub fn test_filter() -> OutputFilter {
+    OutputFilter::new(Layout::new(TEST_WINDOW_ROWS))
+}
+
+/// A resize handler for the main loop tests that keeps the window the same size.
+#[cfg(test)]
+pub fn keep_layout<W>(_output: &mut W) -> Result<Layout> {
+    Ok(Layout::new(TEST_WINDOW_ROWS))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::term::bar::BAR_ROWS;
+    use crate::term::bar::{BAR_ROWS, limit_scrolling};
+    use crate::term::escape::{CSI, SCROLL_REGION};
     use crate::term::pty::forward_output;
     use crate::term::test_terminal::{run_in_test_terminal, terminal_settings, test_name};
     use portable_pty::PtySize;
@@ -291,7 +322,7 @@ mod tests {
         sender.send(Event::Output(TOO_LATE.to_vec()))?;
         let mut output = Vec::new();
 
-        let error = forward_events(receiver, &mut output, |_| Ok(()))
+        let error = forward_events(receiver, &mut output, test_filter(), keep_layout)
             .err()
             .context("termination should stop the loop")?;
 
@@ -337,7 +368,7 @@ mod tests {
         sender.send(Event::Output(TOO_LATE.to_vec()))?;
         let mut output = Vec::new();
 
-        let result = forward_events(receiver, &mut output, |_| {
+        let result = forward_events(receiver, &mut output, test_filter(), |_| {
             panic!("test resize panic");
         });
 
@@ -369,13 +400,29 @@ mod tests {
         let calls = RefCell::new(Vec::new());
         let main_thread = thread::current().id();
 
-        forward_events(receiver, Recorder(&calls), |_| {
+        forward_events(receiver, Recorder(&calls), test_filter(), |_| {
             assert_eq!(thread::current().id(), main_thread);
             calls.borrow_mut().extend_from_slice(b"resize|");
-            Ok(())
+            keep_layout(&mut ())
         })?;
 
         assert_eq!(*calls.borrow(), b"before|resize|after|");
+        Ok(())
+    }
+
+    #[test]
+    fn a_resize_moves_the_filter_limit() -> Result<()> {
+        let taller = Layout::new(TEST_WINDOW_ROWS + 10);
+        let reset_scrolling = format!("{CSI}{SCROLL_REGION}");
+        let (sender, receiver) = sync_channel(3);
+        sender.send(Event::Resized)?;
+        sender.send(Event::Output(reset_scrolling.into_bytes()))?;
+        sender.send(Event::OutputFinished(Ok(())))?;
+        let mut output = Vec::new();
+
+        forward_events(receiver, &mut output, test_filter(), |_| Ok(taller))?;
+
+        assert_eq!(output, limit_scrolling(taller.shell_rows).into_bytes());
         Ok(())
     }
 
@@ -389,7 +436,7 @@ mod tests {
         let mut bytes = Vec::new();
         let mut output = BufWriter::new(&mut bytes);
 
-        forward_events(receiver, &mut output, |_| Ok(()))?;
+        forward_events(receiver, &mut output, test_filter(), keep_layout)?;
 
         assert!(
             output.buffer().is_empty(),
@@ -418,7 +465,7 @@ mod tests {
             sender.send(Event::OutputFinished(Ok(())))?;
             let mut output = Vec::new();
 
-            let error = forward_events(receiver, &mut output, |_| Err(failure()))
+            let error = forward_events(receiver, &mut output, test_filter(), |_| Err(failure()))
                 .err()
                 .context("the thread error should stop the loop")?;
 
@@ -441,7 +488,7 @@ mod tests {
         sender.send(Event::InputFinished(Ok(())))?;
         drop(sender);
 
-        let result = forward_events(receiver, io::sink(), |_| Ok(()));
+        let result = forward_events(receiver, io::sink(), test_filter(), keep_layout);
 
         assert!(matches!(
             result,
@@ -476,9 +523,14 @@ mod tests {
             sender.send(Event::Output(b"shell> ".to_vec()))?;
             sender.send(Event::OutputFinished(Ok(())))?;
 
-            let error = forward_events(receiver, FailingWriter { fail_on_flush }, |_| Ok(()))
-                .err()
-                .context("the terminal failure should stop the loop")?;
+            let error = forward_events(
+                receiver,
+                FailingWriter { fail_on_flush },
+                test_filter(),
+                keep_layout,
+            )
+            .err()
+            .context("the terminal failure should stop the loop")?;
 
             assert_eq!(error.to_string(), expected);
             assert_eq!(

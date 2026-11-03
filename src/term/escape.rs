@@ -35,3 +35,49 @@ pub const ERASE_LINE: &str = "\x1b[2K";
 /// Moves the cursor down a row, and scrolls when it is on the bottom row that scrolls. In
 /// raw mode it stays in the same column.
 pub const LINE_FEED: char = '\n';
+
+/// The escape byte that starts every terminal code.
+pub const ESCAPE: u8 = 0x1b;
+
+/// Cancels a code that is half sent. The terminal drops what came before it.
+pub const CANCEL: u8 = 0x18;
+
+/// Cancels a code that is half sent, like `CANCEL`.
+pub const SUBSTITUTE: u8 = 0x1a;
+
+/// Ends `CSI row ; column f`, an older way to write `CURSOR_POSITION`.
+pub const CURSOR_POSITION_OLD: char = 'f';
+
+/// Ends `CSI row d`, which moves the cursor to a row and keeps its column.
+pub const ROW_POSITION: char = 'd';
+
+/// Ends `CSI number J`, which erases part of the screen. 0 or no number erases from the
+/// cursor to the end, 1 from the start to the cursor, 2 everything, 3 also the scrollback.
+pub const ERASE_SCREEN: char = 'J';
+
+/// The `ERASE_SCREEN` number that erases from the start of the screen to the cursor only.
+pub const ERASE_ABOVE: u16 = 1;
+
+/// Marks a CSI code as private to the terminal, such as `CSI ? 1049 h`.
+pub const PRIVATE_MARKER: u8 = b'?';
+
+/// Ends `CSI ? number h`, which turns a terminal mode on.
+pub const MODE_ON: char = 'h';
+
+/// Ends `CSI ? number l`, which turns a terminal mode off.
+pub const MODE_OFF: char = 'l';
+
+/// Modes that switch to or from the second screen that full screen programs draw on.
+pub const OTHER_SCREEN_MODES: [u16; 3] = [47, 1047, 1049];
+
+/// The mode that holds the screen still while a program draws, so nothing shows half done.
+pub const SYNCHRONIZED_OUTPUT_MODE: u16 = 2026;
+
+/// Comes before `SOFT_RESET` in `CSI ! p`.
+pub const SOFT_RESET_MARKER: u8 = b'!';
+
+/// Ends `CSI ! p`, which puts most terminal settings back, such as the rows that scroll.
+pub const SOFT_RESET: char = 'p';
+
+/// Ends `ESC c`, which resets the terminal fully.
+pub const FULL_RESET: u8 = b'c';

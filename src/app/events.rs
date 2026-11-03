@@ -151,7 +151,7 @@ pub fn forward_input(mut reader: impl Read, mut writer: impl Write) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::super::session::forward_events;
+    use super::super::session::{forward_events, keep_layout, test_filter};
     use super::*;
     use crate::term::raw;
     use crate::term::test_terminal::{run_in_test_terminal, test_name};
@@ -336,7 +336,7 @@ mod tests {
         signal_hook::low_level::raise(SIGWINCH)?;
         let mut guard = start_resize_thread(signals, sender)?;
 
-        forward_events(receiver, io::sink(), |_| Ok(()))?;
+        forward_events(receiver, io::sink(), test_filter(), keep_layout)?;
         guard.stop()?;
 
         assert!(guard.thread.is_none());

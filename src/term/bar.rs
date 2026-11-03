@@ -76,6 +76,11 @@ impl BarGuard {
         Ok(Self { layout })
     }
 
+    /// How the rows are shared right now.
+    pub fn layout(&self) -> Layout {
+        self.layout
+    }
+
     /// Shares the rows again after the window changed size.
     pub fn resize(&mut self, layout: Layout, output: &mut impl Write) -> Result<()> {
         write_codes(output, &setup_codes(layout))?;
@@ -117,10 +122,16 @@ fn setup_codes(layout: Layout) -> String {
         codes.push(LINE_FEED);
     }
     codes.push_str(&format!("{CSI}{BAR_ROWS}{CURSOR_UP}{SAVE_CURSOR}"));
-    codes.push_str(&format!("{CSI}1;{}{SCROLL_REGION}", layout.shell_rows));
+    codes.push_str(&limit_scrolling(layout.shell_rows));
     push_erase_bar(&mut codes, first_bar_row, layout.rows);
     codes.push_str(RESTORE_CURSOR);
     codes
+}
+
+/// The code that lets only the top `shell_rows` rows scroll. The terminal also moves the
+/// cursor to the top left.
+pub fn limit_scrolling(shell_rows: u16) -> String {
+    format!("{CSI}1;{shell_rows}{SCROLL_REGION}")
 }
 
 /// Codes that empty the bar and let the whole window scroll again.
