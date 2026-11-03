@@ -3,5 +3,7 @@
 pub mod app;
 pub mod art;
 pub mod cat;
+pub mod commands;
 pub mod env;
+pub mod shell;
 pub mod term;
