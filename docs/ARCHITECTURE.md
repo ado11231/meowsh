@@ -189,7 +189,14 @@ flowchart TD
 * Takes the list of pictures to show. Knows nothing about what they are.
 * If the list is the same as last time, it does nothing.
 * It waits for a pause in the shell's output, so it never cuts into it.
-* It shows each new picture first, then removes the old one, so the cat never flickers.
+* Both terminals use the kitty picture codes, but they keep pictures in different places, so the painter draws in one of two ways:
+
+| Way | Terminals | How It Draws |
+| --- | --- | --- |
+| **Layered** | kitty & any terminal not named below | Pictures float above the text. Show the new picture, then remove the old one by its number. Never erase the bar's cells or hold the screen. |
+| **In the cells** | VS Code (`TERM_PROGRAM=vscode`) | Pictures are burned into the cells & removing one by its number leaves it on screen. Hold the screen, erase the bar's cells, show the new picture, remove the old one, then let go. |
+
+* Holding the screen means synchronized output (`?2026`). In VS Code it stops flicker. In kitty it causes flicker & trails, so the layered way never uses it.
 * It puts the cursor back where the shell left it.
 * It tells the terminal not to reply, because a reply would arrive as if you typed it.
 * Each window only removes its own pictures.
@@ -348,8 +355,9 @@ flowchart TD
 | Problem | Plan |
 | --- | --- |
 | An escape code can arrive split in two pieces. | Hold back the first piece until the rest arrives. |
-| VS Code cannot reuse a picture it was already sent. | Send the whole picture each time it changes. |
-| Smooth movement needs steps smaller than one character. | Shift the picture inside a character cell. Test in VS Code early. |
+| VS Code burns pictures into the cells, so removing one by its number leaves a trail. | Use the in the cells way in VS Code. See [The Painter](#the-painter). |
+| kitty removes pictures when the screen is cleared. | Draw again after any clear. |
+| Smooth movement needs steps smaller than one character. | Shift the picture inside a character cell. Works in kitty & VS Code. |
 | Big frames are slow to send. | Keep frames small. See [ANIMATION.md](ANIMATION.md#frame-rules). |
 | Coding agents redraw the screen often. | Draw the bar again after any output that could have touched it. |
 | Drawing while a program is mid redraw can tear the screen. | Wait for it to finish. |
