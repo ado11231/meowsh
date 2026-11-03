@@ -1,8 +1,8 @@
 # Architecture
 
-* How Meowsh works inside & what every source file will do.
+* How Meowsh works inside & what every source file does or will do.
 * What the cat does: [DESIGN.md](DESIGN.md). How frames are made: [ANIMATION.md](ANIMATION.md). Order of work: [ROADMAP.md](ROADMAP.md).
-* Nothing is built yet.
+* Built so far: the wrapper, the startup scripts & install. The bar, the cat & the art are still plans. See [ROADMAP.md](ROADMAP.md#status).
 
 ## Contents
 
@@ -130,7 +130,7 @@ flowchart TD
 
 ## The Main Loop
 
-* One loop in `app.rs` runs the whole program. It waits for something to happen, deals with it, then waits again.
+* One loop in `app/session.rs` runs the whole program. It waits for something to happen, deals with it, then waits again.
 * Helper threads only listen: one for your keys, one for the shell's output, one for window resizes. They hand what they hear to the loop.
 
 ```mermaid
@@ -357,7 +357,7 @@ flowchart TD
 ## File Reference
 
 ```
-kat/
+meowsh/
 ├── Cargo.toml              the package & the program, both named meowsh
 ├── build.rs                reads assets/animations & packs the frames in
 ├── assets/
@@ -369,17 +369,18 @@ kat/
 │   ├── anim.rs             shared: the animation list made by build.rs
 │   ├── scene.rs            shared: what is in the bar & where
 │   ├── env.rs              shared: names of environment settings
-│   ├── app.rs              joins the parts & runs the main loop
-│   ├── app/                the helper threads, notices & the clock
+│   ├── app.rs              joins the parts, starts the session or falls back
+│   ├── app/                the session & main loop, the helper threads, notices & the clock
 │   ├── term.rs             the terminal part
-│   ├── term/               PTY, keeping the bar, the painter, pictures, what is in front
+│   ├── term/               PTY, raw mode, escape codes, keeping the bar, the painter, pictures, what is in front
 │   ├── cat.rs              the cat part: the brain
 │   ├── cat/                day, actions, reactions, player, motion
 │   ├── art.rs              the art part: the pictures
 │   ├── art/                pixels & color
 │   ├── store/              state.json & config.toml
 │   ├── commands/           one file per command
-│   └── shell.rs            the startup line & the bash & zsh scripts
+│   ├── shell.rs            the startup scripts that meowsh init prints
+│   └── shell/              the bash & zsh scripts
 └── tests/                  whole program tests with real PTYs
 ```
 

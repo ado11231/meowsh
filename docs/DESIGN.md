@@ -2,7 +2,7 @@
 
 * What Meowsh is & how the cat behaves.
 * How it is built: [ARCHITECTURE.md](ARCHITECTURE.md). How the cat is drawn: [ANIMATION.md](ANIMATION.md).
-* This describes the planned behavior. Nothing is built yet.
+* This describes the planned behavior. Only the shell wrapper & install are built so far. See [ROADMAP.md](ROADMAP.md#status).
 
 ## Contents
 

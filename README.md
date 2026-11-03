@@ -6,7 +6,9 @@
 
 ## Status
 
-* Planning. There is no code yet.
+* Early work. Meowsh runs your shell inside its PTY & passes everything through, but there is no bar or cat yet.
+* Done so far: setup & the shell wrapper, with `meowsh install` & `meowsh uninstall`.
+* Next: the bar & animations.
 * See the [roadmap](docs/ROADMAP.md) for the order of work.
 
 ## Docs
