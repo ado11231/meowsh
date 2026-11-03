@@ -3,6 +3,7 @@
 
 #![cfg(unix)]
 
+use meowsh::term::bar::BAR_ROWS;
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use std::io::{ErrorKind, Read, Write};
 use std::sync::mpsc::{self, Receiver};
@@ -83,7 +84,8 @@ fn termination_exits_with_the_signal_code() -> Result {
     check_session(true)
 }
 
-/// Runs Meowsh in a test terminal, resizes it a few times, and checks the shell's size.
+/// Runs Meowsh in a test terminal, resizes it a few times, and checks the shell's size,
+/// which leaves out the bar unless the window is too short for it.
 /// Then ends the shell, or stops Meowsh with SIGTERM when `terminate` is true.
 fn check_session(terminate: bool) -> Result {
     let pty = native_pty_system().openpty(size(24, 80))?;
@@ -123,8 +125,16 @@ fn check_session(terminate: bool) -> Result {
     writer.flush()?;
     wait_for_output(&output, READY)?;
 
-    for (rows, cols) in [(24, 80), (40, 120), (9, 30), (24, 80)] {
-        pty.master.resize(size(rows, cols))?;
+    // The window's size, then the size the shell should see.
+    let sizes = [
+        ((24, 80), (24 - BAR_ROWS, 80)),
+        ((40, 120), (40 - BAR_ROWS, 120)),
+        // Too short for the bar, so the shell gets every row.
+        ((9, 30), (9, 30)),
+        ((24, 80), (24 - BAR_ROWS, 80)),
+    ];
+    for ((window_rows, window_cols), (rows, cols)) in sizes {
+        pty.master.resize(size(window_rows, window_cols))?;
 
         // Give the main loop time to resize, with a shell loop that gives up.
         writeln!(
