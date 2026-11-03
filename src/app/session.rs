@@ -3,6 +3,7 @@
 use super::events::{Event, start_input_thread, start_output_thread, start_resize_thread};
 use super::{TerminationSignal, catch_panic};
 use crate::env::MEOWSH_TTY;
+use crate::term::bar::{BarGuard, Layout};
 use crate::term::pty::{ShellGuard, open_pty, resize_pty, spawn_shell};
 use crate::term::raw;
 use anyhow::{Context, Result};
@@ -25,16 +26,19 @@ pub struct Session {
     reader: Box<dyn Read + Send>,
     writer: Box<dyn Write + Send>,
     signals: Signals,
+    // Dropped before raw mode ends, so the bar is given back in the same mode it was kept.
+    bar: BarGuard,
     _raw_mode: raw::RawModeGuard,
 }
 
 impl Session {
-    /// Starts the shell in a new PTY the same size as the real terminal.
+    /// Keeps the bar rows, then starts the shell in a new PTY the size of the rows above.
     pub fn start(mut command: CommandBuilder) -> Result<Self> {
         // Watch signals before raw mode, so a shutdown signal also takes the cleanup path.
         let signals = raw::watch_signals()?;
         let size = raw::read_size()?;
-        let pty = open_pty(size)?;
+        let layout = Layout::new(size.rows);
+        let pty = open_pty(layout.shell_size(size))?;
         let tty_name = pty
             .master
             .tty_name()
@@ -51,6 +55,7 @@ impl Session {
             .context("could not open PTY writer")?;
 
         let raw_mode = raw::RawModeGuard::enable()?;
+        let bar = BarGuard::enter(layout, &mut std::io::stdout())?;
         let shell = ShellGuard {
             child: spawn_shell(&pty, command)?,
         };
@@ -63,6 +68,7 @@ impl Session {
             reader,
             writer,
             signals,
+            bar,
             _raw_mode: raw_mode,
         })
     }
@@ -73,6 +79,7 @@ impl Session {
         // Each thread needs its own sender. Cloning a sender does not copy any events.
         let mut resize_guard = start_resize_thread(self.signals, sender.clone())?;
         let master = self.master;
+        let mut bar = self.bar;
 
         forward_session(
             self.reader,
@@ -80,7 +87,14 @@ impl Session {
             sender,
             receiver,
             std::io::stdout(),
-            |_| resize_pty(master.as_ref(), raw::read_size()?),
+            |output| {
+                let size = raw::read_size()?;
+                let layout = Layout::new(size.rows);
+                // Share the rows before the shell hears of the new size, so its redraw
+                // lands above the bar.
+                bar.resize(layout, output)?;
+                resize_pty(master.as_ref(), layout.shell_size(size))
+            },
         )?;
 
         let status = self
@@ -145,6 +159,7 @@ pub fn forward_events<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::term::bar::BAR_ROWS;
     use crate::term::pty::forward_output;
     use crate::term::test_terminal::{run_in_test_terminal, terminal_settings, test_name};
     use portable_pty::PtySize;
@@ -505,8 +520,11 @@ mod tests {
         assert!(raw_mode_enabled()?);
         assert_ne!(terminal_settings()?, before);
         let size = session.master.get_size()?;
-        let expected = PtySize::default();
-        assert_eq!((size.rows, size.cols), (expected.rows, expected.cols));
+        let window = PtySize::default();
+        assert_eq!(
+            (size.rows, size.cols),
+            (window.rows - BAR_ROWS, window.cols)
+        );
         let status = session.shell.child.wait()?;
         assert_eq!(status.exit_code(), 7);
 
