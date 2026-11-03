@@ -8,3 +8,5 @@
 pub mod escape;
 pub mod pty;
 pub mod raw;
+#[cfg(test)]
+pub mod test_terminal;
