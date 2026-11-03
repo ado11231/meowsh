@@ -3,3 +3,4 @@
 pub mod art;
 pub mod cat;
 pub mod env;
+pub mod term;
