@@ -100,3 +100,10 @@ pub const DEVICE_ATTRIBUTES: u8 = b'c';
 
 /// Starts the answer to `ASK_DEVICE_ATTRIBUTES`.
 pub const DEVICE_ATTRIBUTES_START: &str = "\x1b[?";
+
+/// Holds the screen still until `RELEASE_SCREEN`, so a drawing shows all at once. It is
+/// `CSI ? SYNCHRONIZED_OUTPUT_MODE h`.
+pub const HOLD_SCREEN: &str = "\x1b[?2026h";
+
+/// Lets the screen show again after `HOLD_SCREEN`.
+pub const RELEASE_SCREEN: &str = "\x1b[?2026l";

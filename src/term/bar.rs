@@ -144,7 +144,8 @@ fn leave_codes(layout: Layout) -> String {
     codes
 }
 
-fn push_erase_bar(codes: &mut String, first_bar_row: u16, last_row: u16) {
+/// Adds codes that erase every row from `first_bar_row` to `last_row`. They move the cursor.
+pub fn push_erase_bar(codes: &mut String, first_bar_row: u16, last_row: u16) {
     for row in first_bar_row..=last_row {
         codes.push_str(&format!("{CSI}{row};1{CURSOR_POSITION}{ERASE_LINE}"));
     }
