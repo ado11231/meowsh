@@ -6,4 +6,5 @@ pub mod cat;
 pub mod commands;
 pub mod env;
 pub mod shell;
+pub mod store;
 pub mod term;

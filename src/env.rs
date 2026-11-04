@@ -15,6 +15,12 @@ pub const ZDOTDIR: &str = "ZDOTDIR";
 /// Set when running inside tmux.
 pub const TMUX: &str = "TMUX";
 
+/// Names the terminal program, in terminals that set it.
+pub const TERM_PROGRAM: &str = "TERM_PROGRAM";
+
+/// The `TERM_PROGRAM` of the terminal in VS Code.
+pub const VSCODE_TERM_PROGRAM: &str = "vscode";
+
 /// Holds the name of the PTY the shell runs in. The startup script skips Meowsh when this
 /// matches the shell's own terminal, so Meowsh never starts inside itself.
 pub const MEOWSH_TTY: &str = "MEOWSH_TTY";

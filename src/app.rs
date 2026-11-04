@@ -8,6 +8,7 @@ mod events;
 mod session;
 
 use crate::env;
+use crate::store::{self, image_hint};
 use crate::term::image_check::check_images;
 use crate::term::pty::{build_shell_command, run_shell_directly};
 use anyhow::Result;
@@ -43,6 +44,7 @@ pub fn start(shell: Option<OsString>, login: bool) -> Result<ExitCode> {
     if !image_check.supported {
         // There is no text version of the cat, so Meowsh steps aside. Keys typed during the
         // check cannot be handed to a shell that replaces this process, so they are lost.
+        show_image_hint_once();
         return run_shell_directly(&shell_path, login);
     }
     let mut session = match Session::start(build_shell_command(&shell_path, login)) {
@@ -51,6 +53,35 @@ pub fn start(shell: Option<OsString>, login: bool) -> Result<ExitCode> {
     };
     session.pass_on_early_input(&image_check.early_input)?;
     session.run()
+}
+
+/// Shown once when the terminal said no to pictures. Each stays on one line.
+pub const IMAGE_HINT: &str = "meowsh: this terminal cannot show pictures, so the cat stays away";
+
+/// Shown instead of `IMAGE_HINT` in VS Code, where pictures are a setting.
+pub const VSCODE_IMAGE_HINT: &str =
+    "meowsh: turn on terminal.integrated.enableImages in VS Code to see the cat";
+
+/// Prints the hint about pictures, unless it was shown before in any window.
+fn show_image_hint_once() {
+    let first_time = store::data_folder().and_then(|folder| image_hint::first_time(&folder));
+    // The hint is a nicety. If its file cannot be read or made, staying silent is better than
+    // showing it in every new window or keeping the shell from starting.
+    if let Ok(true) = first_time {
+        eprintln!(
+            "{}",
+            image_hint_text(std::env::var_os(env::TERM_PROGRAM).as_deref())
+        );
+    }
+}
+
+/// Picks the hint for the terminal program named in `TERM_PROGRAM`.
+fn image_hint_text(term_program: Option<&OsStr>) -> &'static str {
+    if term_program == Some(OsStr::new(env::VSCODE_TERM_PROGRAM)) {
+        VSCODE_IMAGE_HINT
+    } else {
+        IMAGE_HINT
+    }
 }
 
 /// Says why Meowsh could not wrap the shell, then runs the shell directly.
@@ -86,6 +117,15 @@ mod tests {
             Some(ErrorKind::BrokenPipe)
         );
         Ok(())
+    }
+
+    #[test]
+    fn vs_code_gets_its_own_picture_hint() {
+        let vscode = OsStr::new(env::VSCODE_TERM_PROGRAM);
+
+        assert_eq!(image_hint_text(Some(vscode)), VSCODE_IMAGE_HINT);
+        assert_eq!(image_hint_text(Some(OsStr::new("kitty"))), IMAGE_HINT);
+        assert_eq!(image_hint_text(None), IMAGE_HINT);
     }
 
     #[test]
