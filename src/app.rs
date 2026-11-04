@@ -8,6 +8,7 @@ mod events;
 mod session;
 
 use crate::env;
+use crate::term::image_check::check_images;
 use crate::term::pty::{build_shell_command, run_shell_directly};
 use anyhow::Result;
 use std::ffi::{OsStr, OsString};
@@ -35,10 +36,21 @@ pub fn start(shell: Option<OsString>, login: bool) -> Result<ExitCode> {
         Some(path) => path,
         None => env::shell()?,
     };
-    match Session::start(build_shell_command(&shell_path, login)) {
-        Ok(session) => session.run(),
-        Err(error) => fall_back(&error, &shell_path, login),
+    let image_check = match check_images() {
+        Ok(image_check) => image_check,
+        Err(error) => return fall_back(&error, &shell_path, login),
+    };
+    if !image_check.supported {
+        // There is no text version of the cat, so Meowsh steps aside. Keys typed during the
+        // check cannot be handed to a shell that replaces this process, so they are lost.
+        return run_shell_directly(&shell_path, login);
     }
+    let mut session = match Session::start(build_shell_command(&shell_path, login)) {
+        Ok(session) => session,
+        Err(error) => return fall_back(&error, &shell_path, login),
+    };
+    session.pass_on_early_input(&image_check.early_input)?;
+    session.run()
 }
 
 /// Says why Meowsh could not wrap the shell, then runs the shell directly.

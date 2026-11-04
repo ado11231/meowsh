@@ -74,6 +74,17 @@ impl Session {
         })
     }
 
+    /// Sends keys typed before the session started to the shell, ahead of any new keys.
+    pub fn pass_on_early_input(&mut self, early_input: &[u8]) -> Result<()> {
+        if early_input.is_empty() {
+            return Ok(());
+        }
+        self.writer
+            .write_all(early_input)
+            .and_then(|()| self.writer.flush())
+            .context("could not pass early keys to the shell")
+    }
+
     /// Runs the session until the shell exits, and returns the shell's exit code.
     pub fn run(mut self) -> Result<ExitCode> {
         let (sender, receiver) = sync_channel(EVENT_QUEUE_SIZE);

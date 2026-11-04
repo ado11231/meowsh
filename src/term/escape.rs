@@ -81,3 +81,22 @@ pub const SOFT_RESET: char = 'p';
 
 /// Ends `ESC c`, which resets the terminal fully.
 pub const FULL_RESET: u8 = b'c';
+
+/// Starts a kitty picture code: `ESC _ G settings ; data ESC \`.
+pub const PICTURE_START: &str = "\x1b_G";
+
+/// Ends a kitty picture code, and any other code that is not ended by `BELL`.
+pub const STRING_END: &str = "\x1b\\";
+
+/// What a kitty picture reply says after its settings when the picture worked.
+pub const PICTURE_OK: &str = "OK";
+
+/// Asks the terminal what it is. Every terminal answers, so it marks the end of the replies
+/// to any question sent before it.
+pub const ASK_DEVICE_ATTRIBUTES: &str = "\x1b[c";
+
+/// Ends the answer to `ASK_DEVICE_ATTRIBUTES`: `CSI ? numbers c`.
+pub const DEVICE_ATTRIBUTES: u8 = b'c';
+
+/// Starts the answer to `ASK_DEVICE_ATTRIBUTES`.
+pub const DEVICE_ATTRIBUTES_START: &str = "\x1b[?";
