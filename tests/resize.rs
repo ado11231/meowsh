@@ -4,6 +4,8 @@
 #![cfg(unix)]
 
 use meowsh::term::bar::BAR_ROWS;
+use meowsh::term::escape::{DEVICE_ATTRIBUTES, DEVICE_ATTRIBUTES_START};
+use meowsh::term::image_check::{check_codes, picture_ok_answer};
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use std::io::{ErrorKind, Read, Write};
 use std::sync::mpsc::{self, Receiver};
@@ -84,6 +86,18 @@ fn termination_exits_with_the_signal_code() -> Result {
     check_session(true)
 }
 
+/// Answers Meowsh's picture check the way a terminal that can show pictures does.
+fn answer_image_check(output: &Receiver<Vec<u8>>, writer: &mut impl Write) -> Result {
+    wait_for_output(output, check_codes().as_bytes())?;
+    let attributes_answer = format!(
+        "{DEVICE_ATTRIBUTES_START}62;{}",
+        char::from(DEVICE_ATTRIBUTES)
+    );
+    write!(writer, "{}{attributes_answer}", picture_ok_answer())?;
+    writer.flush()?;
+    Ok(())
+}
+
 /// Runs Meowsh in a test terminal, resizes it a few times, and checks the shell's size,
 /// which leaves out the bar unless the window is too short for it.
 /// Then ends the shell, or stops Meowsh with SIGTERM when `terminate` is true.
@@ -119,6 +133,8 @@ fn check_session(terminate: bool) -> Result {
             }
         }
     });
+
+    answer_image_check(&output, &mut writer)?;
 
     // The shell sees the first line once it is ready, so typing cannot be lost.
     writeln!(writer, "printf '%s\\n' {}", String::from_utf8_lossy(READY))?;
