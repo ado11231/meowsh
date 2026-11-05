@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | 0 | An empty project with the rules & checks in place | Done |
 | 1 | A wrapper you cannot notice | Done |
-| 2 | The bar, with one still picture in it | Planned |
+| 2 | The bar, with one still picture in it | Done |
 | 3 | Animations from folders & a preview command | In progress |
 | 4 | The cat's day & resting actions | Planned |
 | 5 | Reactions | Planned |
