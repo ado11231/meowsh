@@ -2,9 +2,12 @@
 
 use super::events::{Event, start_input_thread, start_output_thread, start_resize_thread};
 use super::{TerminationSignal, catch_panic};
-use crate::env::MEOWSH_TTY;
+use crate::art::placeholder::{Still, placeholder};
+use crate::env::{MEOWSH_TTY, TERM_PROGRAM};
 use crate::term::bar::{BarGuard, Layout};
 use crate::term::filter::OutputFilter;
+use crate::term::painter::{BarArea, BarPicture, DrawingWay, Painter};
+use crate::term::picture::Pixels;
 use crate::term::pty::{ShellGuard, open_pty, resize_pty, spawn_shell};
 use crate::term::raw;
 use anyhow::{Context, Result};
@@ -12,13 +15,27 @@ use portable_pty::{CommandBuilder, MasterPty};
 use signal_hook::iterator::Signals;
 use std::io::{Read, Write};
 use std::process::ExitCode;
-use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
+use std::time::Duration;
 
 /// How many events can wait in the queue before the helper threads pause.
 const EVENT_QUEUE_SIZE: usize = 16;
 
 /// Exit code used when the shell's own code does not fit in a byte.
 const FALLBACK_EXIT_CODE: u8 = 1;
+
+/// How long the shell's output must stop before the bar is drawn, so a drawing never cuts
+/// into the output.
+const DRAW_PAUSE: Duration = Duration::from_millis(30);
+
+/// The error when every helper thread is gone before the shell's output ended.
+const QUEUE_CLOSED: &str = "session event queue closed unexpectedly";
+
+/// The placeholder's `content` number. It never changes, because the placeholder never does.
+const PLACEHOLDER_CONTENT: u64 = 0;
+
+/// How far from the left end of the bar the placeholder starts, in its own pixels.
+const PLACEHOLDER_X: u32 = 0;
 
 /// A running shell, with the terminal in raw mode until the session is dropped.
 pub struct Session {
@@ -93,8 +110,12 @@ impl Session {
         let master = self.master;
         let mut bar = self.bar;
         let filter = OutputFilter::new(bar.layout());
+        let way = DrawingWay::for_terminal(std::env::var_os(TERM_PROGRAM).as_deref());
+        let mut painter = Painter::new(way);
+        let still = placeholder();
+        let pictures = [placeholder_picture(&still)];
 
-        forward_session(
+        let finished = forward_session(
             self.reader,
             self.writer,
             sender,
@@ -110,7 +131,25 @@ impl Session {
                 resize_pty(master.as_ref(), layout.shell_size(size))?;
                 Ok(layout)
             },
-        )?;
+            |output, wiped| {
+                let size = raw::read_size()?;
+                let area = BarArea::new(Layout::new(size.rows), size);
+                if wiped {
+                    painter.bar_wiped();
+                }
+                let mut codes = String::new();
+                painter.paint(&pictures, area, &mut codes)?;
+                write_drawing(output, &codes)
+            },
+        );
+        // In kitty pictures float above the text, so they would stay on screen after Meowsh
+        // ends. The bar is not there anymore, so nothing new is drawn.
+        let mut codes = String::new();
+        let removed = painter
+            .paint(&[], None, &mut codes)
+            .and_then(|()| write_drawing(&mut std::io::stdout(), &codes));
+        finished?;
+        removed?;
 
         let status = self
             .shell
@@ -124,7 +163,33 @@ impl Session {
     }
 }
 
+/// The placeholder as a picture for the bar.
+fn placeholder_picture(still: &Still) -> BarPicture<'_> {
+    BarPicture {
+        content: PLACEHOLDER_CONTENT,
+        pixels: Pixels {
+            width: still.width,
+            height: still.height,
+            rgba: &still.rgba,
+        },
+        x: PLACEHOLDER_X,
+    }
+}
+
+/// Sends the painter's codes to the terminal, if it made any.
+fn write_drawing(output: &mut impl Write, codes: &str) -> Result<()> {
+    if codes.is_empty() {
+        return Ok(());
+    }
+    output
+        .write_all(codes.as_bytes())
+        .and_then(|()| output.flush())
+        .context("could not draw the bar")
+}
+
 /// Starts the input and output threads, then runs the main loop.
+// Each argument is handed straight on, so a struct to hold them would add nothing.
+#[allow(clippy::too_many_arguments)]
 fn forward_session<W: Write>(
     reader: impl Read + Send + 'static,
     writer: impl Write + Send + 'static,
@@ -133,12 +198,13 @@ fn forward_session<W: Write>(
     output: W,
     filter: OutputFilter,
     resize: impl FnMut(&mut W) -> Result<Layout>,
+    draw: impl FnMut(&mut W, bool) -> Result<()>,
 ) -> Result<()> {
     // The input thread may stay blocked on stdin, so it is not joined.
     let _input_thread = start_input_thread(writer, sender.clone())?;
     let output_thread = start_output_thread(reader, sender)?;
     // Owning the receiver here closes the queue before the resize cleanup, on any error.
-    forward_events(receiver, output, filter, resize)?;
+    forward_events(receiver, output, filter, resize, draw)?;
     output_thread
         .join()
         .map_err(|_| anyhow::anyhow!("shell output thread panicked"))
@@ -147,19 +213,31 @@ fn forward_session<W: Write>(
 /// The main loop: handles events until shell output ends or a helper thread fails.
 ///
 /// Shell output passes through `filter` on its way out. `resize` shares the rows again after
-/// the window changed size and returns the new layout.
+/// the window changed size and returns the new layout. `draw` draws the bar & is told whether
+/// the bar may have been wiped. It is called at the start, after a wipe & after a resize, once
+/// the output pauses.
 pub fn forward_events<W: Write>(
     receiver: Receiver<Event>,
     mut output: W,
     mut filter: OutputFilter,
     mut resize: impl FnMut(&mut W) -> Result<Layout>,
+    mut draw: impl FnMut(&mut W, bool) -> Result<()>,
 ) -> Result<()> {
     // Kept between events, so it is not allocated again for every piece of output.
     let mut filtered = Vec::new();
+    // The bar starts empty, so it is drawn at the first pause.
+    let mut draw_waiting = true;
+    let mut wiped = false;
     loop {
-        let event = receiver
-            .recv()
-            .context("session event queue closed unexpectedly")?;
+        let Some(event) = next_event(&receiver, draw_waiting)? else {
+            // A program holding the screen is still drawing, so the bar waits until it lets go.
+            if !filter.screen_held() {
+                catch_panic("draw handler panicked", || draw(&mut output, wiped))?;
+                draw_waiting = false;
+                wiped = false;
+            }
+            continue;
+        };
         match event {
             Event::Output(bytes) => {
                 filtered.clear();
@@ -168,16 +246,36 @@ pub fn forward_events<W: Write>(
                     .write_all(&filtered)
                     .context("could not write shell output")?;
                 output.flush().context("could not flush shell output")?;
+                if filter.take_bar_wiped() {
+                    wiped = true;
+                    draw_waiting = true;
+                }
             }
             Event::InputFinished(result) => result?,
             Event::OutputFinished(result) => return result,
             Event::Resized => {
                 let layout = catch_panic("resize handler panicked", || resize(&mut output))?;
                 filter.set_layout(layout);
+                // Sharing the rows again erases the bar.
+                wiped = true;
+                draw_waiting = true;
             }
             Event::ResizeFailed(error) => return Err(error),
             Event::Terminated(signal) => return Err(TerminationSignal(signal).into()),
         }
+    }
+}
+
+/// Waits for the next event. While a drawing is waiting, gives up after `DRAW_PAUSE` with no
+/// event & returns `None`.
+fn next_event(receiver: &Receiver<Event>, draw_waiting: bool) -> Result<Option<Event>> {
+    if !draw_waiting {
+        return receiver.recv().map(Some).context(QUEUE_CLOSED);
+    }
+    match receiver.recv_timeout(DRAW_PAUSE) {
+        Ok(event) => Ok(Some(event)),
+        Err(RecvTimeoutError::Timeout) => Ok(None),
+        Err(RecvTimeoutError::Disconnected) => Err(anyhow::anyhow!(QUEUE_CLOSED)),
     }
 }
 
@@ -197,11 +295,17 @@ pub fn keep_layout<W>(_output: &mut W) -> Result<Layout> {
     Ok(Layout::new(TEST_WINDOW_ROWS))
 }
 
+/// A draw handler for the main loop tests that draws nothing.
+#[cfg(test)]
+pub fn draw_nothing<W>(_output: &mut W, _wiped: bool) -> Result<()> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::term::bar::{BAR_ROWS, limit_scrolling};
-    use crate::term::escape::{CSI, SCROLL_REGION};
+    use crate::term::escape::{CSI, ERASE_SCREEN, HOLD_SCREEN, RELEASE_SCREEN, SCROLL_REGION};
     use crate::term::pty::forward_output;
     use crate::term::test_terminal::{run_in_test_terminal, terminal_settings, test_name};
     use portable_pty::PtySize;
@@ -333,9 +437,15 @@ mod tests {
         sender.send(Event::Output(TOO_LATE.to_vec()))?;
         let mut output = Vec::new();
 
-        let error = forward_events(receiver, &mut output, test_filter(), keep_layout)
-            .err()
-            .context("termination should stop the loop")?;
+        let error = forward_events(
+            receiver,
+            &mut output,
+            test_filter(),
+            keep_layout,
+            draw_nothing,
+        )
+        .err()
+        .context("termination should stop the loop")?;
 
         assert_eq!(
             error.to_string(),
@@ -379,9 +489,15 @@ mod tests {
         sender.send(Event::Output(TOO_LATE.to_vec()))?;
         let mut output = Vec::new();
 
-        let result = forward_events(receiver, &mut output, test_filter(), |_| {
-            panic!("test resize panic");
-        });
+        let result = forward_events(
+            receiver,
+            &mut output,
+            test_filter(),
+            |_| {
+                panic!("test resize panic");
+            },
+            draw_nothing,
+        );
 
         assert!(matches!(result, Err(error) if error.to_string() == "resize handler panicked"));
         assert!(output.is_empty());
@@ -411,13 +527,154 @@ mod tests {
         let calls = RefCell::new(Vec::new());
         let main_thread = thread::current().id();
 
-        forward_events(receiver, Recorder(&calls), test_filter(), |_| {
-            assert_eq!(thread::current().id(), main_thread);
-            calls.borrow_mut().extend_from_slice(b"resize|");
-            keep_layout(&mut ())
-        })?;
+        forward_events(
+            receiver,
+            Recorder(&calls),
+            test_filter(),
+            |_| {
+                assert_eq!(thread::current().id(), main_thread);
+                calls.borrow_mut().extend_from_slice(b"resize|");
+                keep_layout(&mut ())
+            },
+            draw_nothing,
+        )?;
 
         assert_eq!(*calls.borrow(), b"before|resize|after|");
+        Ok(())
+    }
+
+    /// Written by the test draw handler, for a drawing with nothing wiped.
+    const DRAWN: &[u8] = b"<drawn>";
+
+    /// Written by the test draw handler, for a drawing after a wipe.
+    const DRAWN_AFTER_WIPE: &[u8] = b"<drawn after wipe>";
+
+    /// One step for the thread that feeds the main loop in the drawing tests.
+    enum Step {
+        /// Send this event.
+        Send(Event),
+        /// Wait until the loop has drawn.
+        WaitForDrawing,
+        /// Wait long enough for a drawing that should not happen.
+        WaitPastPause,
+    }
+
+    /// Runs the main loop on events fed by another thread as `steps` say, then ends the
+    /// output. Returns what the loop wrote.
+    fn run_with_drawing(steps: Vec<Step>) -> Result<Vec<u8>> {
+        let (sender, receiver) = sync_channel(steps.len() + 1);
+        let (drawn_sender, drawn_receiver) = std::sync::mpsc::channel();
+        let feeding = thread::spawn(move || -> Result<()> {
+            for step in steps {
+                match step {
+                    Step::Send(event) => sender.send(event)?,
+                    Step::WaitForDrawing => drawn_receiver.recv()?,
+                    Step::WaitPastPause => thread::sleep(DRAW_PAUSE * 3),
+                }
+            }
+            sender.send(Event::OutputFinished(Ok(())))?;
+            Ok(())
+        });
+        let mut output = Vec::new();
+
+        forward_events(
+            receiver,
+            &mut output,
+            test_filter(),
+            keep_layout,
+            |output: &mut &mut Vec<u8>, wiped| {
+                output.extend_from_slice(if wiped { DRAWN_AFTER_WIPE } else { DRAWN });
+                // The feeding thread may have finished already, which is fine.
+                let _ = drawn_sender.send(());
+                Ok(())
+            },
+        )?;
+        feeding
+            .join()
+            .map_err(|_| anyhow::anyhow!("feeding thread panicked"))??;
+        Ok(output)
+    }
+
+    /// `bytes` as the filter passes them on.
+    fn filtered(bytes: &[u8]) -> Vec<u8> {
+        let mut output = Vec::new();
+        test_filter().filter(bytes, &mut output);
+        output
+    }
+
+    /// The code that clears the whole screen.
+    fn clear_screen() -> Vec<u8> {
+        format!("{CSI}2{ERASE_SCREEN}").into_bytes()
+    }
+
+    #[test]
+    fn the_bar_is_drawn_at_the_first_pause_and_not_again() -> Result<()> {
+        let output = run_with_drawing(vec![
+            Step::Send(Event::Output(b"first".to_vec())),
+            Step::WaitForDrawing,
+            Step::Send(Event::Output(b"second".to_vec())),
+            Step::WaitPastPause,
+        ])?;
+
+        assert_eq!(output, [b"first", DRAWN, b"second"].concat());
+        Ok(())
+    }
+
+    #[test]
+    fn clearing_the_screen_draws_the_bar_again() -> Result<()> {
+        let output = run_with_drawing(vec![
+            Step::WaitForDrawing,
+            Step::Send(Event::Output(clear_screen())),
+            Step::WaitForDrawing,
+        ])?;
+
+        assert_eq!(
+            output,
+            [DRAWN, &filtered(&clear_screen()), DRAWN_AFTER_WIPE].concat()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_resize_draws_the_bar_again() -> Result<()> {
+        let output = run_with_drawing(vec![
+            Step::WaitForDrawing,
+            Step::Send(Event::Resized),
+            Step::WaitForDrawing,
+        ])?;
+
+        assert_eq!(output, [DRAWN, DRAWN_AFTER_WIPE].concat());
+        Ok(())
+    }
+
+    #[test]
+    fn the_bar_waits_while_a_program_holds_the_screen() -> Result<()> {
+        let held_clear = [HOLD_SCREEN.as_bytes(), &clear_screen()].concat();
+
+        let output = run_with_drawing(vec![
+            Step::WaitForDrawing,
+            Step::Send(Event::Output(held_clear.clone())),
+            Step::WaitPastPause,
+            Step::Send(Event::Output(RELEASE_SCREEN.as_bytes().to_vec())),
+            Step::WaitForDrawing,
+        ])?;
+
+        let program_output = filtered(&[&held_clear, RELEASE_SCREEN.as_bytes()].concat());
+        assert_eq!(output, [DRAWN, &program_output, DRAWN_AFTER_WIPE].concat());
+        Ok(())
+    }
+
+    #[test]
+    fn a_draw_panic_closes_the_session() -> Result<()> {
+        let (sender, receiver) = sync_channel(1);
+        let mut output = Vec::new();
+
+        let result = forward_events(receiver, &mut output, test_filter(), keep_layout, |_, _| {
+            panic!("test draw panic");
+        });
+
+        assert!(matches!(result, Err(error) if error.to_string() == "draw handler panicked"));
+        assert!(queue_is_closed(&sender));
         Ok(())
     }
 
@@ -431,7 +688,13 @@ mod tests {
         sender.send(Event::OutputFinished(Ok(())))?;
         let mut output = Vec::new();
 
-        forward_events(receiver, &mut output, test_filter(), |_| Ok(taller))?;
+        forward_events(
+            receiver,
+            &mut output,
+            test_filter(),
+            |_| Ok(taller),
+            draw_nothing,
+        )?;
 
         assert_eq!(output, limit_scrolling(taller.shell_rows).into_bytes());
         Ok(())
@@ -447,7 +710,13 @@ mod tests {
         let mut bytes = Vec::new();
         let mut output = BufWriter::new(&mut bytes);
 
-        forward_events(receiver, &mut output, test_filter(), keep_layout)?;
+        forward_events(
+            receiver,
+            &mut output,
+            test_filter(),
+            keep_layout,
+            draw_nothing,
+        )?;
 
         assert!(
             output.buffer().is_empty(),
@@ -476,9 +745,15 @@ mod tests {
             sender.send(Event::OutputFinished(Ok(())))?;
             let mut output = Vec::new();
 
-            let error = forward_events(receiver, &mut output, test_filter(), |_| Err(failure()))
-                .err()
-                .context("the thread error should stop the loop")?;
+            let error = forward_events(
+                receiver,
+                &mut output,
+                test_filter(),
+                |_| Err(failure()),
+                draw_nothing,
+            )
+            .err()
+            .context("the thread error should stop the loop")?;
 
             assert_eq!(
                 error.downcast_ref::<io::Error>().map(io::Error::kind),
@@ -499,7 +774,13 @@ mod tests {
         sender.send(Event::InputFinished(Ok(())))?;
         drop(sender);
 
-        let result = forward_events(receiver, io::sink(), test_filter(), keep_layout);
+        let result = forward_events(
+            receiver,
+            io::sink(),
+            test_filter(),
+            keep_layout,
+            draw_nothing,
+        );
 
         assert!(matches!(
             result,
@@ -539,6 +820,7 @@ mod tests {
                 FailingWriter { fail_on_flush },
                 test_filter(),
                 keep_layout,
+                draw_nothing,
             )
             .err()
             .context("the terminal failure should stop the loop")?;
