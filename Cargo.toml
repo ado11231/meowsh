@@ -23,3 +23,8 @@ vte = "0.15.0"
 unwrap_used = "deny"
 expect_used = "deny"
 redundant_clone = "warn"
+
+[build-dependencies]
+anyhow = "1.0.104"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.2.1"
