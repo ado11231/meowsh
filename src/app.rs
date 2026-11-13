@@ -2,16 +2,21 @@
 //! use `term`, `cat`, and `art` together.
 //!
 //! * `events`: the threads that read keys, read shell output, and watch signals.
+//! * `pictures`: turns the cat's scene into pictures for the painter.
 //! * `session`: starts the shell in a PTY and runs the main loop.
 
 mod events;
+mod pictures;
 mod session;
 
+use crate::anim;
+use crate::art::library::Library;
+use crate::art::recolor::Colors;
 use crate::env;
 use crate::store::{self, image_hint};
 use crate::term::image_check::check_images;
 use crate::term::pty::{build_shell_command, run_shell_directly};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 
@@ -47,13 +52,30 @@ pub fn start(shell: Option<OsString>, login: bool) -> Result<ExitCode> {
         show_image_hint_once();
         return run_shell_directly(&shell_path, login);
     }
+    let colors = match (image_check.text_color, image_check.background_color) {
+        (Some(text), Some(background)) => Some(Colors { text, background }),
+        // Without both colors the cat keeps the colors it was drawn in.
+        _ => None,
+    };
+    let art = Library::load(colors).and_then(|library| {
+        let animation = anim::find(RESTING_ANIMATION)
+            .with_context(|| format!("there is no {RESTING_ANIMATION} animation"))?;
+        Ok((library, animation))
+    });
+    let (library, animation) = match art {
+        Ok(art) => art,
+        Err(error) => return fall_back(&error, &shell_path, login),
+    };
     let mut session = match Session::start(build_shell_command(&shell_path, login)) {
         Ok(session) => session,
         Err(error) => return fall_back(&error, &shell_path, login),
     };
     session.pass_on_early_input(&image_check.early_input)?;
-    session.run()
+    session.run(&library, animation)
 }
+
+/// The animation played in the bar, until the cat picks its own.
+const RESTING_ANIMATION: &str = "sit";
 
 /// Shown once when the terminal said no to pictures. Each stays on one line.
 pub const IMAGE_HINT: &str = "meowsh: this terminal cannot show pictures, so the cat stays away";

@@ -1,14 +1,16 @@
 //! The session: starts the shell in a PTY and runs the main loop that passes data along.
 
 use super::events::{Event, start_input_thread, start_output_thread, start_resize_thread};
+use super::pictures::bar_pictures;
 use super::{TerminationSignal, catch_panic};
-use crate::art::placeholder::placeholder;
-use crate::art::still::Still;
+use crate::anim::Animation;
+use crate::art::library::Library;
+use crate::cat::player::Player;
 use crate::env::{MEOWSH_TTY, TERM_PROGRAM};
+use crate::scene::{Facing, Scene, ScenePicture};
 use crate::term::bar::{BarGuard, Layout};
 use crate::term::filter::OutputFilter;
-use crate::term::painter::{BarArea, BarPicture, DrawingWay, Painter};
-use crate::term::picture::Pixels;
+use crate::term::painter::{BarArea, DrawingWay, Painter};
 use crate::term::pty::{ShellGuard, open_pty, resize_pty, spawn_shell};
 use crate::term::raw;
 use anyhow::{Context, Result};
@@ -32,11 +34,8 @@ const DRAW_PAUSE: Duration = Duration::from_millis(30);
 /// The error when every helper thread is gone before the shell's output ended.
 const QUEUE_CLOSED: &str = "session event queue closed unexpectedly";
 
-/// The placeholder's `content` number. It never changes, because the placeholder never does.
-const PLACEHOLDER_CONTENT: u64 = 0;
-
-/// How far from the left end of the bar the placeholder starts, in its own pixels.
-const PLACEHOLDER_X: u32 = 0;
+/// How far from the left end of the bar the cat stands, in art pixels.
+const CAT_X: u32 = 0;
 
 /// A running shell, with the terminal in raw mode until the session is dropped.
 pub struct Session {
@@ -103,8 +102,9 @@ impl Session {
             .context("could not pass early keys to the shell")
     }
 
-    /// Runs the session until the shell exits, and returns the shell's exit code.
-    pub fn run(mut self) -> Result<ExitCode> {
+    /// Runs the session until the shell exits, playing `animation` in the bar, and returns the
+    /// shell's exit code.
+    pub fn run(mut self, library: &Library, animation: &'static Animation) -> Result<ExitCode> {
         let (sender, receiver) = sync_channel(EVENT_QUEUE_SIZE);
         // Each thread needs its own sender. Cloning a sender does not copy any events.
         let mut resize_guard = start_resize_thread(self.signals, sender.clone())?;
@@ -113,8 +113,8 @@ impl Session {
         let filter = OutputFilter::new(bar.layout());
         let way = DrawingWay::for_terminal(std::env::var_os(TERM_PROGRAM).as_deref());
         let mut painter = Painter::new(way);
-        let still = placeholder();
-        let pictures = [placeholder_picture(&still)];
+        let clock = Instant::now();
+        let player = Player::start(animation, clock.elapsed());
 
         let finished = forward_session(
             self.reader,
@@ -138,10 +138,20 @@ impl Session {
                 if wiped {
                     painter.bar_wiped();
                 }
+                let now = clock.elapsed();
+                let scene = Scene {
+                    pictures: vec![ScenePicture {
+                        animation: animation.name,
+                        frame: player.at(now).frame,
+                        x: CAT_X,
+                        facing: Facing::Right,
+                    }],
+                };
+                let pictures = bar_pictures(&scene, library)?;
                 let mut codes = String::new();
                 painter.paint(&pictures, area, &mut codes)?;
                 write_drawing(output, &codes)?;
-                Ok(None)
+                Ok(player.until_next_frame(now))
             },
         );
         // In kitty pictures float above the text, so they would stay on screen after Meowsh
@@ -162,19 +172,6 @@ impl Session {
 
         let exit_code = u8::try_from(status.exit_code()).unwrap_or(FALLBACK_EXIT_CODE);
         Ok(ExitCode::from(exit_code))
-    }
-}
-
-/// The placeholder as a picture for the bar.
-fn placeholder_picture(still: &Still) -> BarPicture<'_> {
-    BarPicture {
-        content: PLACEHOLDER_CONTENT,
-        pixels: Pixels {
-            width: still.width,
-            height: still.height,
-            rgba: &still.rgba,
-        },
-        x: PLACEHOLDER_X,
     }
 }
 
@@ -344,6 +341,11 @@ mod tests {
         command
     }
 
+    /// The sit animation, played in the session tests.
+    fn sit() -> Result<&'static Animation> {
+        crate::anim::find("sit").context("sit is missing")
+    }
+
     fn raw_mode_enabled() -> Result<bool> {
         Ok(crossterm::terminal::is_raw_mode_enabled()?)
     }
@@ -397,7 +399,7 @@ mod tests {
 
         session.writer.write_all(b"\x03")?;
         session.writer.flush()?;
-        let status = session.run()?;
+        let status = session.run(&Library::load(None)?, sit()?)?;
 
         assert_eq!(status, ExitCode::from(7));
         assert!(!raw_mode_enabled()?);
@@ -413,6 +415,7 @@ mod tests {
             return Ok(());
         }
         let before = terminal_settings()?;
+        let library = Library::load(None)?;
 
         for signal in [SIGHUP, SIGINT, SIGQUIT, SIGTERM] {
             let session = Session::start(shell_command("read value"))?;
@@ -426,7 +429,7 @@ mod tests {
             // Queue the signal after it is watched, before the main loop starts.
             signal_hook::low_level::raise(signal)?;
             let error = session
-                .run()
+                .run(&library, sit()?)
                 .err()
                 .context("the signal should stop the session")?;
 
