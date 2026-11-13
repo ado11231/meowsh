@@ -17,6 +17,8 @@ pub struct Canvas {
 pub struct Animation {
     /// The folder name, such as `sit`.
     pub name: &'static str,
+    /// How many frames it has, named `00.png`, `01.png` & so on.
+    pub frame_count: usize,
     /// How long each frame shows, in milliseconds.
     pub frame_ms: u32,
     /// True: play again from the start. False: stop on the last frame.
@@ -45,6 +47,7 @@ mod tests {
     fn finds_an_animation_by_name() -> Result<()> {
         let sit = find("sit").context("sit is missing")?;
         ensure!(sit.name == "sit");
+        ensure!(sit.frame_count > 0, "sit has no frames");
         Ok(())
     }
 

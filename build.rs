@@ -1,10 +1,12 @@
-//! Reads the settings in `assets/animations/` & writes them as Rust for `src/anim.rs`.
-//! A missing or broken setting stops the build with a message that names the file.
+//! Reads the settings & checks the frames in `assets/animations/`, then writes them as Rust
+//! for `src/anim.rs`. A broken setting or frame stops the build with a message that names
+//! the file. The frame rules are in docs/ANIMATION.md.
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 use std::fmt::Write as _;
-use std::fs;
+use std::fs::{self, File};
+use std::io::BufReader;
 use std::path::Path;
 
 /// The folder that holds `canvas.toml` & one folder per animation.
@@ -18,6 +20,12 @@ const ANIM_FILE: &str = "anim.toml";
 
 /// The file written into the build folder & included by `src/anim.rs`.
 const OUTPUT_FILE: &str = "animations.rs";
+
+/// Bytes per pixel in a frame: red, green, blue & how see through it is.
+const BYTES_PER_PIXEL: usize = 4;
+
+/// Where the "how see through" byte sits in each pixel.
+const ALPHA_INDEX: usize = 3;
 
 /// `canvas.toml`: the size every frame shares & the row the feet stand on.
 #[derive(Deserialize)]
@@ -42,6 +50,13 @@ struct AnimSettings {
     frame_ms_each: Option<Vec<u32>>,
 }
 
+/// One animation folder that passed every check.
+struct FoundAnimation {
+    name: String,
+    settings: AnimSettings,
+    frame_count: usize,
+}
+
 /// `recolor` is on unless an animation turns it off.
 fn recolor_default() -> bool {
     true
@@ -52,7 +67,7 @@ fn main() -> Result<()> {
 
     let folder = Path::new(ANIMATIONS_FOLDER);
     let canvas = read_canvas(&folder.join(CANVAS_FILE))?;
-    let animations = read_animations(folder)?;
+    let animations = read_animations(folder, &canvas)?;
 
     let output_folder = std::env::var_os("OUT_DIR").context("OUT_DIR is not set")?;
     let output_path = Path::new(&output_folder).join(OUTPUT_FILE);
@@ -77,8 +92,8 @@ fn read_canvas(path: &Path) -> Result<CanvasSettings> {
     Ok(canvas)
 }
 
-/// Reads & checks the `anim.toml` of every animation folder, sorted by name.
-fn read_animations(folder: &Path) -> Result<Vec<(String, AnimSettings)>> {
+/// Reads & checks the `anim.toml` & frames of every animation folder, sorted by name.
+fn read_animations(folder: &Path, canvas: &CanvasSettings) -> Result<Vec<FoundAnimation>> {
     let entries =
         fs::read_dir(folder).with_context(|| format!("could not read {}", folder.display()))?;
     let mut animations = Vec::new();
@@ -101,10 +116,111 @@ fn read_animations(folder: &Path) -> Result<Vec<(String, AnimSettings)>> {
             );
         }
         let settings = read_anim(&path.join(ANIM_FILE))?;
-        animations.push((name, settings));
+        let frame_count = check_frames(&path, canvas)?;
+        if let Some(times) = &settings.frame_ms_each {
+            ensure!(
+                times.len() == frame_count,
+                "{}: frame_ms_each has {} times but there are {frame_count} frames",
+                path.join(ANIM_FILE).display(),
+                times.len()
+            );
+        }
+        animations.push(FoundAnimation {
+            name,
+            settings,
+            frame_count,
+        });
     }
-    animations.sort_by(|left, right| left.0.cmp(&right.0));
+    animations.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(animations)
+}
+
+/// Checks the frames in one animation folder & returns how many there are. They must be
+/// named `00.png`, `01.png` & so on with no gaps, & each must pass [`check_frame`].
+fn check_frames(folder: &Path, canvas: &CanvasSettings) -> Result<usize> {
+    let entries =
+        fs::read_dir(folder).with_context(|| format!("could not read {}", folder.display()))?;
+    let mut file_names = Vec::new();
+    for entry in entries {
+        let file_name = entry
+            .with_context(|| format!("could not read {}", folder.display()))?
+            .file_name();
+        let file_name = file_name
+            .to_str()
+            .with_context(|| format!("{}: a file name is not plain text", folder.display()))?
+            .to_owned();
+        // Hidden files, such as the .DS_Store macOS leaves behind, are not frames.
+        if file_name != ANIM_FILE && !file_name.starts_with('.') {
+            file_names.push(file_name);
+        }
+    }
+    ensure!(
+        !file_names.is_empty(),
+        "{}: has no frames",
+        folder.display()
+    );
+    file_names.sort();
+    for (index, file_name) in file_names.iter().enumerate() {
+        let expected = frame_file_name(index);
+        ensure!(
+            *file_name == expected,
+            "{}: found {file_name} where {expected} should be. Frames are named 00.png, 01.png & so on, with no gaps",
+            folder.display()
+        );
+        check_frame(&folder.join(file_name), canvas)?;
+    }
+    Ok(file_names.len())
+}
+
+/// The file name of a frame, such as `03.png`.
+fn frame_file_name(index: usize) -> String {
+    format!("{index:02}.png")
+}
+
+/// Checks one frame: 8 bit RGBA, the canvas size & nothing drawn below the floor.
+fn check_frame(path: &Path, canvas: &CanvasSettings) -> Result<()> {
+    let file = File::open(path).with_context(|| format!("could not open {}", path.display()))?;
+    let mut reader = png::Decoder::new(BufReader::new(file))
+        .read_info()
+        .with_context(|| format!("{} is not a PNG", path.display()))?;
+    let info = reader.info();
+    ensure!(
+        info.color_type == png::ColorType::Rgba && info.bit_depth == png::BitDepth::Eight,
+        "{}: must be 8 bit RGBA, with a see through background",
+        path.display()
+    );
+    ensure!(
+        info.width == canvas.width && info.height == canvas.height,
+        "{}: is {} by {} but the canvas is {} by {}",
+        path.display(),
+        info.width,
+        info.height,
+        canvas.width,
+        canvas.height
+    );
+    let buffer_size = reader
+        .output_buffer_size()
+        .with_context(|| format!("{} is too big", path.display()))?;
+    let mut pixels = vec![0; buffer_size];
+    let frame = reader
+        .next_frame(&mut pixels)
+        .with_context(|| format!("could not read the pixels of {}", path.display()))?;
+    // Rows below the floor must be fully see through, so the cat never sinks into the bar.
+    let below_floor = (canvas.floor as usize + 1) * frame.line_size;
+    let drawn_below_floor = pixels
+        .get(below_floor..frame.buffer_size())
+        .with_context(|| format!("{}: has fewer rows than the canvas", path.display()))?
+        .as_chunks::<BYTES_PER_PIXEL>()
+        .0
+        .iter()
+        .any(|pixel| pixel[ALPHA_INDEX] != 0);
+    ensure!(
+        !drawn_below_floor,
+        "{}: something is drawn below the floor row {}",
+        path.display(),
+        canvas.floor
+    );
+    Ok(())
 }
 
 /// Reads & checks one `anim.toml`.
@@ -141,7 +257,7 @@ fn is_plain_name(name: &str) -> bool {
 }
 
 /// Writes the settings as Rust constants of the types in `src/anim.rs`.
-fn write_rust(canvas: &CanvasSettings, animations: &[(String, AnimSettings)]) -> Result<String> {
+fn write_rust(canvas: &CanvasSettings, animations: &[FoundAnimation]) -> Result<String> {
     let mut rust = String::new();
     writeln!(
         rust,
@@ -149,14 +265,19 @@ fn write_rust(canvas: &CanvasSettings, animations: &[(String, AnimSettings)]) ->
         canvas.width, canvas.height, canvas.floor
     )?;
     writeln!(rust, "pub const ANIMATIONS: &[Animation] = &[")?;
-    for (name, settings) in animations {
+    for FoundAnimation {
+        name,
+        settings,
+        frame_count,
+    } in animations
+    {
         let frame_ms_each = match &settings.frame_ms_each {
             Some(times) => format!("Some(&{times:?})"),
             None => "None".to_owned(),
         };
         writeln!(
             rust,
-            "    Animation {{ name: {name:?}, frame_ms: {}, loops: {}, step: {}, recolor: {}, frame_ms_each: {frame_ms_each} }},",
+            "    Animation {{ name: {name:?}, frame_count: {frame_count}, frame_ms: {}, loops: {}, step: {}, recolor: {}, frame_ms_each: {frame_ms_each} }},",
             settings.frame_ms, settings.loops, settings.step, settings.recolor
         )?;
     }

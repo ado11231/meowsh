@@ -26,5 +26,6 @@ redundant_clone = "warn"
 
 [build-dependencies]
 anyhow = "1.0.104"
+png = "0.18.1"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.2.1"

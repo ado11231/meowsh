@@ -58,7 +58,7 @@ flowchart LR
 
 | Rule | Why |
 | --- | --- |
-| PNG with a see through background. | The terminal's own background shows behind the cat. |
+| PNG, 8 bit RGBA, with a see through background. | The terminal's own background shows behind the cat. |
 | Every frame of every animation is the same size. | Meowsh can swap any frame for any other in place. |
 | The feet stand on the same floor in every frame. | The cat does not jump up & down between animations. |
 | The cat faces right. | Meowsh flips it to face left. |
@@ -135,7 +135,7 @@ recolor = true
 
 * A Grease Pencil drawing of the cat, in white, facing right.
 * A camera looking straight at the cat with no perspective (Orthographic), framing exactly 309 by 215 pixels.
-* Output: 309 by 215, PNG, RGBA, with a see through background (Render Properties, Film, Transparent).
+* Output: 309 by 215, PNG, RGBA, 8 bit color depth, with a see through background (Render Properties, Film, Transparent).
 * A thin guide line on the floor row, so every pose stands on it. Hide it before you render.
 * Bones for the body, head, tail & each leg.
 * One Blender file per animation, named like its folder: `sit.blend`, `walk.blend` & so on.
