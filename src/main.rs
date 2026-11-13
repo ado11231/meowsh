@@ -21,7 +21,8 @@ enum Command {
     Install,
     /// Removes the startup line from your shell settings.
     Uninstall,
-    // Start and Init are helpers for shell startup, so they stay out of the normal help.
+    // Start and Init are helpers for shell startup & Preview is for checking art, so they stay
+    // out of the normal help.
     #[command(hide = true)]
     Start {
         /// Starts the shell as a login shell.
@@ -30,6 +31,12 @@ enum Command {
         /// The shell to run. When left out, `SHELL` is used.
         #[arg(long)]
         shell: Option<OsString>,
+    },
+    /// Plays one animation in the bar, for checking art.
+    #[command(hide = true)]
+    Preview {
+        /// The animation's folder name, such as `sit`.
+        name: String,
     },
     #[command(hide = true)]
     Init {
@@ -63,6 +70,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Install => install::run(true)?,
         Command::Uninstall => install::run(false)?,
         Command::Start { login, shell } => return app::start(shell, login),
+        Command::Preview { name } => return app::preview(&name),
         Command::Init { shell } => init::run(shell)?,
     }
     Ok(ExitCode::SUCCESS)
@@ -107,6 +115,19 @@ mod tests {
             command,
             Command::Start { shell: Some(path), login: true } if path == "/tmp/my shell"
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn preview_needs_an_animation_name() -> Result<()> {
+        assert!(matches!(
+            parse(&["meowsh", "preview", "sit"])?,
+            Command::Preview { name } if name == "sit"
+        ));
+        assert_eq!(
+            error_kind(&["meowsh", "preview"]),
+            Some(ErrorKind::MissingRequiredArgument)
+        );
         Ok(())
     }
 

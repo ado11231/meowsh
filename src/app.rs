@@ -38,6 +38,28 @@ impl std::error::Error for TerminationSignal {}
 ///
 /// `shell` is the shell to run. When it is missing, the user's `SHELL` is used.
 pub fn start(shell: Option<OsString>, login: bool) -> Result<ExitCode> {
+    run(shell, login, RESTING_ANIMATION)
+}
+
+/// Runs the user's shell inside Meowsh with one animation playing in the bar, for checking
+/// art. Unlike `start`, a name with no animation is an error, so a typo is not missed.
+pub fn preview(name: &str) -> Result<ExitCode> {
+    if anim::find(name).is_none() {
+        let names: Vec<&str> = anim::ANIMATIONS
+            .iter()
+            .map(|animation| animation.name)
+            .collect();
+        anyhow::bail!(
+            "there is no animation named {name}. There are: {}",
+            names.join(", ")
+        );
+    }
+    run(None, false, name)
+}
+
+/// Runs `shell` inside Meowsh with the animation named `animation` playing in the bar, or
+/// runs it directly if Meowsh cannot wrap it.
+fn run(shell: Option<OsString>, login: bool, animation: &str) -> Result<ExitCode> {
     let shell_path = match shell {
         Some(path) => path,
         None => env::shell()?,
@@ -58,8 +80,8 @@ pub fn start(shell: Option<OsString>, login: bool) -> Result<ExitCode> {
         _ => None,
     };
     let art = Library::load(colors).and_then(|library| {
-        let animation = anim::find(RESTING_ANIMATION)
-            .with_context(|| format!("there is no {RESTING_ANIMATION} animation"))?;
+        let animation =
+            anim::find(animation).with_context(|| format!("there is no {animation} animation"))?;
         Ok((library, animation))
     });
     let (library, animation) = match art {
@@ -123,6 +145,18 @@ pub fn catch_panic<T>(message: &'static str, operation: impl FnOnce() -> Result<
 mod tests {
     use super::*;
     use std::io::{self, ErrorKind};
+
+    #[test]
+    fn previewing_an_unknown_animation_names_the_ones_there_are() -> Result<()> {
+        let error = preview("not_an_animation")
+            .err()
+            .context("an unknown name should be an error")?;
+
+        let message = error.to_string();
+        assert!(message.contains("not_an_animation"), "{message}");
+        assert!(message.contains("sit"), "{message}");
+        Ok(())
+    }
 
     #[test]
     fn panic_boundary_keeps_success_and_regular_errors() -> Result<()> {
