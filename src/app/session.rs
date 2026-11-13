@@ -17,7 +17,7 @@ use signal_hook::iterator::Signals;
 use std::io::{Read, Write};
 use std::process::ExitCode;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How many events can wait in the queue before the helper threads pause.
 const EVENT_QUEUE_SIZE: usize = 16;
@@ -140,7 +140,8 @@ impl Session {
                 }
                 let mut codes = String::new();
                 painter.paint(&pictures, area, &mut codes)?;
-                write_drawing(output, &codes)
+                write_drawing(output, &codes)?;
+                Ok(None)
             },
         );
         // In kitty pictures float above the text, so they would stay on screen after Meowsh
@@ -199,7 +200,7 @@ fn forward_session<W: Write>(
     output: W,
     filter: OutputFilter,
     resize: impl FnMut(&mut W) -> Result<Layout>,
-    draw: impl FnMut(&mut W, bool) -> Result<()>,
+    draw: impl FnMut(&mut W, bool) -> Result<Option<Duration>>,
 ) -> Result<()> {
     // The input thread may stay blocked on stdin, so it is not joined.
     let _input_thread = start_input_thread(writer, sender.clone())?;
@@ -216,24 +217,39 @@ fn forward_session<W: Write>(
 /// Shell output passes through `filter` on its way out. `resize` shares the rows again after
 /// the window changed size and returns the new layout. `draw` draws the bar & is told whether
 /// the bar may have been wiped. It is called at the start, after a wipe & after a resize, once
-/// the output pauses.
+/// the output pauses. It returns how long until it should be called again, such as when the
+/// next frame of an animation is due, or `None` if nothing changes until the next event.
 pub fn forward_events<W: Write>(
     receiver: Receiver<Event>,
     mut output: W,
     mut filter: OutputFilter,
     mut resize: impl FnMut(&mut W) -> Result<Layout>,
-    mut draw: impl FnMut(&mut W, bool) -> Result<()>,
+    mut draw: impl FnMut(&mut W, bool) -> Result<Option<Duration>>,
 ) -> Result<()> {
     // Kept between events, so it is not allocated again for every piece of output.
     let mut filtered = Vec::new();
     // The bar starts empty, so it is drawn at the first pause.
     let mut draw_waiting = true;
     let mut wiped = false;
+    // When the bar asked to be drawn again.
+    let mut draw_again_at: Option<Instant> = None;
     loop {
-        let Some(event) = next_event(&receiver, draw_waiting)? else {
+        let wait = if draw_waiting {
+            Some(DRAW_PAUSE)
+        } else {
+            draw_again_at.map(|time| time.saturating_duration_since(Instant::now()))
+        };
+        let Some(event) = next_event(&receiver, wait)? else {
+            if !draw_waiting {
+                // The bar asked to be drawn again. It still waits for a pause in the output.
+                draw_again_at = None;
+                draw_waiting = true;
+                continue;
+            }
             // A program holding the screen is still drawing, so the bar waits until it lets go.
             if !filter.screen_held() {
-                catch_panic("draw handler panicked", || draw(&mut output, wiped))?;
+                let again = catch_panic("draw handler panicked", || draw(&mut output, wiped))?;
+                draw_again_at = again.map(|delay| Instant::now() + delay);
                 draw_waiting = false;
                 wiped = false;
             }
@@ -267,13 +283,12 @@ pub fn forward_events<W: Write>(
     }
 }
 
-/// Waits for the next event. While a drawing is waiting, gives up after `DRAW_PAUSE` with no
-/// event & returns `None`.
-fn next_event(receiver: &Receiver<Event>, draw_waiting: bool) -> Result<Option<Event>> {
-    if !draw_waiting {
+/// Waits for the next event. With a `wait`, gives up after it with no event & returns `None`.
+fn next_event(receiver: &Receiver<Event>, wait: Option<Duration>) -> Result<Option<Event>> {
+    let Some(wait) = wait else {
         return receiver.recv().map(Some).context(QUEUE_CLOSED);
-    }
-    match receiver.recv_timeout(DRAW_PAUSE) {
+    };
+    match receiver.recv_timeout(wait) {
         Ok(event) => Ok(Some(event)),
         Err(RecvTimeoutError::Timeout) => Ok(None),
         Err(RecvTimeoutError::Disconnected) => Err(anyhow::anyhow!(QUEUE_CLOSED)),
@@ -296,10 +311,10 @@ pub fn keep_layout<W>(_output: &mut W) -> Result<Layout> {
     Ok(Layout::new(TEST_WINDOW_ROWS))
 }
 
-/// A draw handler for the main loop tests that draws nothing.
+/// A draw handler for the main loop tests that draws nothing & never asks to draw again.
 #[cfg(test)]
-pub fn draw_nothing<W>(_output: &mut W, _wiped: bool) -> Result<()> {
-    Ok(())
+pub fn draw_nothing<W>(_output: &mut W, _wiped: bool) -> Result<Option<Duration>> {
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -563,6 +578,13 @@ mod tests {
     /// Runs the main loop on events fed by another thread as `steps` say, then ends the
     /// output. Returns what the loop wrote.
     fn run_with_drawing(steps: Vec<Step>) -> Result<Vec<u8>> {
+        run_with_drawing_again(steps, &[])
+    }
+
+    /// Like `run_with_drawing`, but the first drawings ask to be drawn again after the
+    /// times in `again`, in order. Later ones do not ask.
+    fn run_with_drawing_again(steps: Vec<Step>, again: &[Duration]) -> Result<Vec<u8>> {
+        let mut again = again.iter().copied();
         let (sender, receiver) = sync_channel(steps.len() + 1);
         let (drawn_sender, drawn_receiver) = std::sync::mpsc::channel();
         let feeding = thread::spawn(move || -> Result<()> {
@@ -587,7 +609,7 @@ mod tests {
                 output.extend_from_slice(if wiped { DRAWN_AFTER_WIPE } else { DRAWN });
                 // The feeding thread may have finished already, which is fine.
                 let _ = drawn_sender.send(());
-                Ok(())
+                Ok(again.next())
             },
         )?;
         feeding
@@ -662,6 +684,23 @@ mod tests {
 
         let program_output = filtered(&[&held_clear, RELEASE_SCREEN.as_bytes()].concat());
         assert_eq!(output, [DRAWN, &program_output, DRAWN_AFTER_WIPE].concat());
+        Ok(())
+    }
+
+    #[test]
+    fn the_bar_is_drawn_again_when_it_asks() -> Result<()> {
+        let output = run_with_drawing_again(
+            vec![
+                Step::WaitForDrawing,
+                Step::WaitForDrawing,
+                Step::WaitForDrawing,
+                Step::WaitPastPause,
+            ],
+            &[DRAW_PAUSE, DRAW_PAUSE],
+        )?;
+
+        // Asked twice, so three drawings in all, & none after the last one stopped asking.
+        assert_eq!(output, [DRAWN, DRAWN, DRAWN].concat());
         Ok(())
     }
 
