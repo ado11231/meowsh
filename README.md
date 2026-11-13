@@ -6,9 +6,9 @@
 
 ## Status
 
-* Early work. Meowsh runs your shell inside its PTY & keeps the bottom rows as a bar, but the cat there is only a still white oval for now.
-* Done so far: setup, the shell wrapper with `meowsh install` & `meowsh uninstall`, & the bar.
-* Next: animations.
+* Early work. Meowsh runs your shell inside its PTY & keeps the bottom rows as a bar, where the cat sits & blinks. It does not move around yet.
+* Done so far: setup, the shell wrapper with `meowsh install` & `meowsh uninstall`, the bar & animations.
+* Next: the cat's day.
 * See the [roadmap](docs/ROADMAP.md) for the order of work.
 
 ## Docs

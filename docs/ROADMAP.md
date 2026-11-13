@@ -2,7 +2,7 @@
 
 * The order Meowsh gets built in.
 * A phase is complete only when its **Done when** line is true in kitty & in the VS Code terminal, on macOS.
-* Last updated November 3, 2026.
+* Last updated November 13, 2026.
 
 ## Contents
 
@@ -19,13 +19,11 @@
 | 0 | An empty project with the rules & checks in place | Done |
 | 1 | A wrapper you cannot notice | Done |
 | 2 | The bar, with one still picture in it | Done |
-| 3 | Animations from folders & a preview command | In progress |
+| 3 | Animations from folders & a preview command | Done |
 | 4 | The cat's day & resting actions | Planned |
 | 5 | Reactions | Planned |
 | 6 | Commands: treat, pet, quiet, come, name | Planned |
 | 7 | A public release | Planned |
-
-* Phase 3's build side can start before Phase 2: the `canvas.toml` & `anim.toml` format, `build.rs`, loading & coloring frames & `cat/player.rs`. Playing in the bar & `preview` wait for the painter from Phase 2.
 
 ```mermaid
 flowchart LR
@@ -101,6 +99,7 @@ flowchart LR
 * `meowsh preview <name>` plays one animation in the bar, for checking art.
 
 * **Done when:** a placeholder animation plays & walks across the bar smoothly & changing `frame_ms` changes its speed with no Rust change.
+* Done with the real `sit`. Walking across the bar moves to Phase 4, because only `sit` is drawn so far.
 
 ### Phase 4: The Day
 
@@ -109,7 +108,7 @@ flowchart LR
 * Resting actions: sit, walk, play, run.
 * Going home for meals & sleep.
 
-* **Done when:** a whole day plays out with `MEOWSH_CLOCK_SPEED=60`, using real art.
+* **Done when:** a whole day plays out with `MEOWSH_CLOCK_SPEED=60`, using real art, & the cat walks across the bar smoothly.
 
 ### Phase 5: Reactions
 
