@@ -6,6 +6,7 @@ pub mod art;
 pub mod cat;
 pub mod commands;
 pub mod env;
+pub mod scene;
 pub mod shell;
 pub mod store;
 pub mod term;

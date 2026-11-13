@@ -1,9 +1,11 @@
 //! Every frame of every animation, read from the PNGs packed into the program by `build.rs`.
 //! Loaded once at startup, then looked up by animation name & frame number.
 
+use super::flip::flip;
 use super::recolor::{Colors, recolor};
 use super::still::Still;
 use crate::anim;
+use crate::scene::Facing;
 use anyhow::{Context, Result, ensure};
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -18,15 +20,22 @@ struct PackedAnimation {
 
 include!(concat!(env!("OUT_DIR"), "/packed_frames.rs"));
 
+/// One frame, facing each way.
+#[derive(Debug)]
+struct Frame {
+    right: Still,
+    left: Still,
+}
+
 /// Every frame, ready to show.
 #[derive(Debug)]
 pub struct Library {
     /// Each animation's frames, in play order, by name.
-    animations: HashMap<&'static str, Vec<Still>>,
+    animations: HashMap<&'static str, Vec<Frame>>,
 }
 
 impl Library {
-    /// Reads every packed frame. With the terminal's colors, frames of animations that have
+    /// Reads every packed frame & makes its left facing copy. With the terminal's colors, frames of animations that have
     /// `recolor` on are changed to them. Without, every frame keeps the colors it was drawn in.
     pub fn load(colors: Option<Colors>) -> Result<Self> {
         let mut animations = HashMap::new();
@@ -49,14 +58,26 @@ impl Library {
                     recolor(frame, colors);
                 }
             }
+            let frames = frames
+                .into_iter()
+                .map(|right| Frame {
+                    left: flip(&right),
+                    right,
+                })
+                .collect();
             animations.insert(packed.name, frames);
         }
         Ok(Self { animations })
     }
 
-    /// One frame of one animation, or `None` if there is no such animation or frame.
-    pub fn frame(&self, name: &str, index: usize) -> Option<&Still> {
-        self.animations.get(name)?.get(index)
+    /// One frame of one animation facing one way, or `None` if there is no such animation
+    /// or frame.
+    pub fn frame(&self, name: &str, index: usize, facing: Facing) -> Option<&Still> {
+        let frame = self.animations.get(name)?.get(index)?;
+        Some(match facing {
+            Facing::Right => &frame.right,
+            Facing::Left => &frame.left,
+        })
     }
 }
 
@@ -130,25 +151,30 @@ mod tests {
     }
 
     #[test]
-    fn every_animation_loads_all_its_frames_at_the_canvas_size() -> Result<()> {
+    fn every_animation_loads_all_its_frames_at_the_canvas_size_facing_each_way() -> Result<()> {
         let library = Library::load(None)?;
 
         for animation in ANIMATIONS {
             for index in 0..animation.frame_count {
-                let still = library
-                    .frame(animation.name, index)
+                let right = library
+                    .frame(animation.name, index, Facing::Right)
                     .with_context(|| format!("{} frame {index} is missing", animation.name))?;
                 ensure!(
-                    still.width == CANVAS.width && still.height == CANVAS.height,
+                    right.width == CANVAS.width && right.height == CANVAS.height,
                     "{} frame {index} is {} by {}",
                     animation.name,
-                    still.width,
-                    still.height
+                    right.width,
+                    right.height
+                );
+                ensure!(
+                    library.frame(animation.name, index, Facing::Left) == Some(&flip(right)),
+                    "{} frame {index} facing left is not the mirror of facing right",
+                    animation.name
                 );
             }
             ensure!(
                 library
-                    .frame(animation.name, animation.frame_count)
+                    .frame(animation.name, animation.frame_count, Facing::Right)
                     .is_none(),
                 "{} has a frame past its last one",
                 animation.name
@@ -169,14 +195,14 @@ mod tests {
         for animation in ANIMATIONS {
             for index in 0..animation.frame_count {
                 let mut expected = as_drawn
-                    .frame(animation.name, index)
+                    .frame(animation.name, index, Facing::Right)
                     .with_context(|| format!("{} frame {index} is missing", animation.name))?
                     .clone();
                 if animation.recolor {
                     recolor(&mut expected, colors);
                 }
                 ensure!(
-                    colored.frame(animation.name, index) == Some(&expected),
+                    colored.frame(animation.name, index, Facing::Right) == Some(&expected),
                     "{} frame {index} has the wrong colors",
                     animation.name
                 );
@@ -189,7 +215,11 @@ mod tests {
     fn an_unknown_animation_has_no_frames() -> Result<()> {
         let library = Library::load(None)?;
 
-        ensure!(library.frame("not_an_animation", 0).is_none());
+        ensure!(
+            library
+                .frame("not_an_animation", 0, Facing::Right)
+                .is_none()
+        );
         Ok(())
     }
 }
