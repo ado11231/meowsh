@@ -1,5 +1,5 @@
 # how long each frame shows, in milliseconds
-frame_ms = 120
+frame_ms = 400
 
 # true: play again from the start. false: stop on the last frame.
 loop = true
