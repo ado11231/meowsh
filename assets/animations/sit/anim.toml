@@ -1,0 +1,11 @@
+# how long each frame shows, in milliseconds
+frame_ms = 120
+
+# true: play again from the start. false: stop on the last frame.
+loop = true
+
+# pixels the cat moves forward each frame. 0 means it stays in place.
+step = 0
+
+# true: change white to the terminal's text color.
+recolor = true

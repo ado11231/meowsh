@@ -87,7 +87,9 @@ floor = 204
 ```
 assets/
 ├── art/
-│   ├── cat.blend           the cat, its bones & one action per animation
+│   ├── sit.blend           the cat posed for one animation
+│   ├── walk.blend
+│   ├── ...
 │   └── props.blend         the bowl & the ball
 └── animations/
     ├── canvas.toml         the shared size & floor
@@ -101,6 +103,7 @@ assets/
 ```
 
 * The folder name is the animation's name in the code, such as `sit` or `walk`.
+* Each animation has its own Blender file in `assets/art/`, named like its folder, such as `sit.blend`.
 
 ## The anim.toml File
 
@@ -135,8 +138,8 @@ recolor = true
 * Output: 309 by 215, PNG, RGBA, with a see through background (Render Properties, Film, Transparent).
 * A thin guide line on the floor row, so every pose stands on it. Hide it before you render.
 * Bones for the body, head, tail & each leg.
-* One action per animation, named like its folder: `sit`, `walk` & so on.
-* Render each action to `assets/animations/<name>/` as `00.png`, `01.png` & so on.
+* One Blender file per animation, named like its folder: `sit.blend`, `walk.blend` & so on.
+* Render each one to `assets/animations/<name>/` as `00.png`, `01.png` & so on.
 
 * Set Blender's frame rate to match `frame_ms`, so the preview in Blender plays at the same speed as Meowsh. For example, 120 ms is about 8 frames per second.
 
@@ -168,7 +171,7 @@ cargo run -- preview walk
 | --- | --- | --- | --- |
 | `sleep` | Yes | No | To draw |
 | `wake` | No | No | To draw |
-| `sit` | Yes | No | To draw |
+| `sit` | Yes | No | Drawn |
 | `sit_down` | No | No | To draw |
 | `walk` | Yes | Yes | To draw |
 | `run` | Yes | Yes | To draw |

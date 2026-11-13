@@ -1,0 +1,6 @@
+# the size every frame shares, in pixels
+width = 309
+height = 215
+
+# the pixel row the cat's feet stand on, the same in every frame
+floor = 204
