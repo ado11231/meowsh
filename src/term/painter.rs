@@ -8,7 +8,7 @@ use super::bar::{Layout, push_erase_bar};
 use super::escape::{
     CSI, CURSOR_POSITION, HOLD_SCREEN, RELEASE_SCREEN, RESTORE_CURSOR, SAVE_CURSOR,
 };
-use super::picture::{Pixels, Placement, remove_code, show_codes};
+use super::picture::{Pixels, Placement, place_code, remove_code, send_codes, show_codes};
 use crate::env::VSCODE_TERM_PROGRAM;
 use anyhow::{Result, ensure};
 use portable_pty::PtySize;
@@ -33,8 +33,10 @@ const FIRST_PICTURE_ID: u32 = 7710;
 /// How the terminal keeps pictures, which decides how they are drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DrawingWay {
-    /// Pictures float above the text, as in kitty. A new picture is shown, then the old one
-    /// is removed. The bar's cells are never erased & the screen is never held.
+    /// Pictures float above the text, as in kitty. A new picture is sent while the cursor is
+    /// still where the shell left it, then placed in the bar, then the old one is removed.
+    /// The bar's cells are never erased & the screen is never held, so the cursor only sits
+    /// in the bar for the short placing code, & no cursor box flashes there.
     Layered,
     /// Pictures are burned into the cells, as in VS Code, so removing one leaves it on
     /// screen. The screen is held while the bar is erased & drawn again.
@@ -221,6 +223,8 @@ impl Painter {
             } else {
                 0
             };
+        // Layered pictures are sent before the cursor moves.
+        let mut sending = String::new();
         let mut codes = String::new();
         if self.way == DrawingWay::InCells {
             codes.push_str(HOLD_SCREEN);
@@ -238,10 +242,19 @@ impl Painter {
                 bar.first_row,
                 column + 1
             ));
-            codes.push_str(&show_codes(id, picture.pixels, placement)?);
+            match self.way {
+                DrawingWay::Layered => {
+                    sending.push_str(&send_codes(id, picture.pixels)?);
+                    codes.push_str(&place_code(id, placement));
+                }
+                DrawingWay::InCells => {
+                    codes.push_str(&show_codes(id, picture.pixels, placement)?);
+                }
+            }
             new_ids.push(id);
         }
         // Built in full first, so an error above leaves the painter as it was.
+        output.push_str(&sending);
         output.push_str(&codes);
         self.push_remove_old(output);
         output.push_str(RESTORE_CURSOR);
@@ -304,6 +317,12 @@ mod tests {
     }
 
     /// The codes that show `picture` as number `id` in `AREA`.
+    /// The codes that move to a picture's place & place it, after it was sent.
+    fn placed(id: u32, picture: BarPicture<'_>) -> Result<String> {
+        let (column, placement) = AREA.place(picture.pixels, picture.x)?;
+        Ok(format!("{CSI}23;{}{CURSOR_POSITION}", column + 1) + &place_code(id, placement))
+    }
+
     fn shown(id: u32, picture: BarPicture<'_>) -> Result<String> {
         let (column, placement) = AREA.place(picture.pixels, picture.x)?;
         Ok(format!("{CSI}23;{}{CURSOR_POSITION}", column + 1)
@@ -400,7 +419,8 @@ mod tests {
     }
 
     #[test]
-    fn layered_drawing_shows_the_new_picture_then_removes_the_old_one() -> Result<()> {
+    fn layered_drawing_sends_first_then_places_the_new_picture_and_removes_the_old_one()
+    -> Result<()> {
         let mut painter = Painter::new(DrawingWay::Layered);
 
         let first = paint(&mut painter, &[picture(1, 0)], Some(AREA))?;
@@ -408,18 +428,21 @@ mod tests {
 
         let first_id = FIRST_PICTURE_ID;
         let second_id = FIRST_PICTURE_ID + PICTURE_ID_SET_SIZE;
+        let pixels = picture(1, 0).pixels;
         assert_eq!(
             first,
             format!(
-                "{SAVE_CURSOR}{}{RESTORE_CURSOR}",
-                shown(first_id, picture(1, 0))?
+                "{}{SAVE_CURSOR}{}{RESTORE_CURSOR}",
+                send_codes(first_id, pixels)?,
+                placed(first_id, picture(1, 0))?
             )
         );
         assert_eq!(
             second,
             format!(
-                "{SAVE_CURSOR}{}{}{RESTORE_CURSOR}",
-                shown(second_id, picture(1, 40))?,
+                "{}{SAVE_CURSOR}{}{}{RESTORE_CURSOR}",
+                send_codes(second_id, pixels)?,
+                placed(second_id, picture(1, 40))?,
                 remove_code(first_id)
             )
         );

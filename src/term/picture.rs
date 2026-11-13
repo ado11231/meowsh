@@ -20,6 +20,12 @@ const BYTES_PER_PIXEL: u64 = 4;
 /// Shows a picture right away, sending it & placing it in one go.
 const SEND_AND_SHOW: &str = "a=T";
 
+/// Sends a picture for the terminal to keep, without showing it.
+const SEND_ONLY: &str = "a=t";
+
+/// Shows a picture the terminal already has, by its number.
+const PLACE: &str = "a=p";
+
 /// Removes a picture by its number & frees what the terminal kept of it.
 const REMOVE_BY_ID: &str = "a=d,d=I";
 
@@ -63,6 +69,34 @@ pub struct Placement {
 
 /// The codes that show `pixels` as picture number `id` at the cursor, as `placement` says.
 pub fn show_codes(id: u32, pixels: Pixels<'_>, placement: Placement) -> Result<String> {
+    let settings = format!(
+        "{SEND_AND_SHOW},{RGBA_FORMAT},s={},v={},i={id},c={},r={},X={},{KEEP_CURSOR},{NO_ANSWER}",
+        pixels.width, pixels.height, placement.columns, placement.rows, placement.offset_x
+    );
+    pixel_codes(&settings, pixels)
+}
+
+/// The codes that send `pixels` as picture number `id` without showing it. Sending is most
+/// of the work, so it can happen before the cursor moves to the bar, & `place_code` then
+/// shows it at once.
+pub fn send_codes(id: u32, pixels: Pixels<'_>) -> Result<String> {
+    let settings = format!(
+        "{SEND_ONLY},{RGBA_FORMAT},s={},v={},i={id},{NO_ANSWER}",
+        pixels.width, pixels.height
+    );
+    pixel_codes(&settings, pixels)
+}
+
+/// The code that shows picture number `id`, sent before by `send_codes`, at the cursor.
+pub fn place_code(id: u32, placement: Placement) -> String {
+    format!(
+        "{PICTURE_START}{PLACE},i={id},c={},r={},X={},{KEEP_CURSOR},{NO_ANSWER}{STRING_END}",
+        placement.columns, placement.rows, placement.offset_x
+    )
+}
+
+/// The codes that carry `pixels`, with `settings` in the first one.
+fn pixel_codes(settings: &str, pixels: Pixels<'_>) -> Result<String> {
     let expected_length = u64::from(pixels.width) * u64::from(pixels.height) * BYTES_PER_PIXEL;
     ensure!(
         u64::try_from(pixels.rgba.len()) == Ok(expected_length),
@@ -70,11 +104,6 @@ pub fn show_codes(id: u32, pixels: Pixels<'_>, placement: Placement) -> Result<S
         pixels.width,
         pixels.height,
         pixels.rgba.len()
-    );
-
-    let settings = format!(
-        "{SEND_AND_SHOW},{RGBA_FORMAT},s={},v={},i={id},c={},r={},X={},{KEEP_CURSOR},{NO_ANSWER}",
-        pixels.width, pixels.height, placement.columns, placement.rows, placement.offset_x
     );
     let data = BASE64.encode(pixels.rgba);
     let pieces: Vec<&[u8]> = data.as_bytes().chunks(MAX_CODE_DATA).collect();
@@ -169,6 +198,31 @@ mod tests {
         assert!(pieces.iter().all(|(_, data)| data.len() <= MAX_CODE_DATA));
         let data: String = pieces.iter().map(|(_, data)| *data).collect();
         assert_eq!(BASE64.decode(data)?, rgba);
+        Ok(())
+    }
+
+    #[test]
+    fn a_picture_can_be_sent_first_and_placed_later() -> Result<()> {
+        let rgba = [255, 0, 0, 255, 0, 0, 0, 0];
+        let pixels = Pixels {
+            width: 2,
+            height: 1,
+            rgba: &rgba,
+        };
+
+        let sent = send_codes(9, pixels)?;
+
+        assert_eq!(
+            sent,
+            format!(
+                "{PICTURE_START}a=t,f=32,s=2,v=1,i=9,q=2,m=0;{}{STRING_END}",
+                BASE64.encode(rgba)
+            )
+        );
+        assert_eq!(
+            place_code(9, PLACEMENT),
+            format!("{PICTURE_START}a=p,i=9,c=6,r=2,X=3,C=1,q=2{STRING_END}")
+        );
         Ok(())
     }
 

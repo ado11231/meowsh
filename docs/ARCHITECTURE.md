@@ -193,7 +193,7 @@ flowchart TD
 
 | Way | Terminals | How It Draws |
 | --- | --- | --- |
-| **Layered** | kitty & any terminal not named below | Pictures float above the text. Show the new picture, then remove the old one by its number. Never erase the bar's cells or hold the screen. |
+| **Layered** | kitty & any terminal not named below | Pictures float above the text. Send the new picture first, while the cursor is still where the shell left it, then place it in the bar & remove the old one by its number. Never erase the bar's cells or hold the screen. |
 | **In the cells** | VS Code (`TERM_PROGRAM=vscode`) | Pictures are burned into the cells & removing one by its number leaves it on screen. Hold the screen, erase the bar's cells, show the new picture, remove the old one, then let go. |
 
 * Holding the screen means synchronized output (`?2026`). In VS Code it stops flicker. In kitty it causes flicker & trails, so the layered way never uses it.
