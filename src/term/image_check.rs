@@ -1,13 +1,14 @@
-//! Asks the real terminal whether it can show pictures, before the bar is set up.
+//! Asks the real terminal whether it can show pictures & what color its text is, before the
+//! bar is set up.
 //!
-//! Meowsh sends a test picture that is only asked about, never shown, then asks what the
-//! terminal is. Every terminal answers the second question, so once that answer arrives,
-//! any answer about the picture has arrived too. Keys typed while waiting are kept, so they
+//! Meowsh sends a test picture that is only asked about, never shown, asks for the text
+//! color, then asks what the terminal is. Every terminal answers the second question, so once that answer arrives,
+//! any answer before it has arrived too. Keys typed while waiting are kept, so they
 //! can be passed on to the shell.
 
 use super::escape::{
-    ASK_DEVICE_ATTRIBUTES, DEVICE_ATTRIBUTES, DEVICE_ATTRIBUTES_START, PICTURE_OK, PICTURE_START,
-    STRING_END,
+    ASK_DEVICE_ATTRIBUTES, ASK_TEXT_COLOR, BELL, DEVICE_ATTRIBUTES, DEVICE_ATTRIBUTES_START,
+    PICTURE_OK, PICTURE_START, RGB_COLOR_PREFIX, RGB_COLOR_SPLIT, STRING_END, TEXT_COLOR_START,
 };
 use super::raw::RawModeGuard;
 use anyhow::{Context, Result};
@@ -28,6 +29,9 @@ const ANSWER_TIMEOUT: Duration = Duration::from_millis(500);
 /// Room for one read of the terminal's answers.
 const READ_BUFFER_SIZE: usize = 1024;
 
+/// The most hex digits a terminal sends for one of red, green or blue.
+const MOST_COLOR_DIGITS: usize = 4;
+
 /// What the check found.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ImageCheck {
@@ -35,12 +39,15 @@ pub struct ImageCheck {
     pub supported: bool,
     /// Keys typed during the check, in the order they came.
     pub early_input: Vec<u8>,
+    /// The terminal's text color as red, green & blue, if it said.
+    pub text_color: Option<[u8; 3]>,
 }
 
-/// The codes that ask the terminal about pictures.
+/// The codes that ask the terminal about pictures & its text color.
 pub fn check_codes() -> String {
     format!(
-        "{PICTURE_START}i={CHECK_PICTURE_ID},{CHECK_PICTURE}{STRING_END}{ASK_DEVICE_ATTRIBUTES}"
+        "{PICTURE_START}i={CHECK_PICTURE_ID},{CHECK_PICTURE}{STRING_END}{ASK_TEXT_COLOR}\
+         {ASK_DEVICE_ATTRIBUTES}"
     )
 }
 
@@ -49,7 +56,7 @@ pub fn picture_ok_answer() -> String {
     format!("{PICTURE_START}{}{STRING_END}", picture_ok_body())
 }
 
-/// Asks the real terminal whether it can show pictures & waits a short time for the answer.
+/// Asks the real terminal whether it can show pictures & its text color, & waits a short time for the answer.
 ///
 /// Raw mode is on only while waiting, so the answers are not shown on screen.
 pub fn check_images() -> Result<ImageCheck> {
@@ -122,6 +129,7 @@ struct AnswerReader {
     /// Bytes that could still be the start of an answer.
     unread: Vec<u8>,
     supported: bool,
+    text_color: Option<[u8; 3]>,
     /// Whether the answer about the terminal arrived, so no more answers are coming.
     finished: bool,
     early_input: Vec<u8>,
@@ -132,6 +140,9 @@ enum Piece {
     /// An answer about a picture, this many bytes long, and whether it was the test
     /// picture working.
     PictureAnswer(usize, bool),
+    /// The answer about the text color, this many bytes long, & the color if it could be
+    /// read.
+    TextColor(usize, Option<[u8; 3]>),
     /// The answer about the terminal, this many bytes long.
     DeviceAttributes(usize),
     /// This many bytes the user typed.
@@ -151,6 +162,10 @@ impl AnswerReader {
             let length = match next_piece(&self.unread) {
                 Piece::PictureAnswer(length, worked) => {
                     self.supported |= worked;
+                    length
+                }
+                Piece::TextColor(length, color) => {
+                    self.text_color = color;
                     length
                 }
                 Piece::DeviceAttributes(length) => {
@@ -173,6 +188,7 @@ impl AnswerReader {
         ImageCheck {
             supported: self.supported,
             early_input: self.early_input,
+            text_color: self.text_color,
         }
     }
 }
@@ -180,6 +196,7 @@ impl AnswerReader {
 fn next_piece(bytes: &[u8]) -> Piece {
     let picture_start = PICTURE_START.as_bytes();
     let attributes_start = DEVICE_ATTRIBUTES_START.as_bytes();
+    let color_start = TEXT_COLOR_START.as_bytes();
 
     if let Some(rest) = bytes.strip_prefix(picture_start) {
         let Some(end) = find(rest, STRING_END.as_bytes()) else {
@@ -187,6 +204,13 @@ fn next_piece(bytes: &[u8]) -> Piece {
         };
         let worked = rest[..end] == *picture_ok_body().as_bytes();
         return Piece::PictureAnswer(picture_start.len() + end + STRING_END.len(), worked);
+    }
+    if let Some(rest) = bytes.strip_prefix(color_start) {
+        let Some((end, end_length)) = find_osc_end(rest) else {
+            return Piece::Unfinished;
+        };
+        let color = std::str::from_utf8(&rest[..end]).ok().and_then(read_color);
+        return Piece::TextColor(color_start.len() + end + end_length, color);
     }
     if let Some(rest) = bytes.strip_prefix(attributes_start) {
         // A CSI code ends with its first byte from `@` to `~`.
@@ -199,7 +223,10 @@ fn next_piece(bytes: &[u8]) -> Piece {
         }
         return Piece::Typed(length);
     }
-    if picture_start.starts_with(bytes) || attributes_start.starts_with(bytes) {
+    if picture_start.starts_with(bytes)
+        || attributes_start.starts_with(bytes)
+        || color_start.starts_with(bytes)
+    {
         return Piece::Unfinished;
     }
     Piece::Typed(1)
@@ -208,6 +235,45 @@ fn next_piece(bytes: &[u8]) -> Piece {
 /// The part of `picture_ok_answer` between its start & end codes.
 fn picture_ok_body() -> String {
     format!("i={CHECK_PICTURE_ID};{PICTURE_OK}")
+}
+
+/// Where an OSC answer ends, & how long its end code is. Terminals end it with either
+/// `STRING_END` or `BELL`.
+fn find_osc_end(bytes: &[u8]) -> Option<(usize, usize)> {
+    let string_end = find(bytes, STRING_END.as_bytes()).map(|end| (end, STRING_END.len()));
+    let bell = find(bytes, &[BELL as u8]).map(|end| (end, 1));
+    match (string_end, bell) {
+        (Some(first), Some(second)) => Some(first.min(second)),
+        (first, second) => first.or(second),
+    }
+}
+
+/// Reads `rgb:R/G/B` into red, green & blue. Each number is 1 to 4 hex digits, so it is
+/// scaled from its own most to 255.
+fn read_color(text: &str) -> Option<[u8; 3]> {
+    let mut numbers = text
+        .strip_prefix(RGB_COLOR_PREFIX)?
+        .split(RGB_COLOR_SPLIT)
+        .map(read_color_number);
+    let color = [numbers.next()??, numbers.next()??, numbers.next()??];
+    match numbers.next() {
+        Some(_) => None,
+        None => Some(color),
+    }
+}
+
+/// Reads one color number of 1 to 4 hex digits & scales it to 0 to 255.
+fn read_color_number(digits: &str) -> Option<u8> {
+    if digits.is_empty()
+        || digits.len() > MOST_COLOR_DIGITS
+        || !digits.bytes().all(|digit| digit.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    let value = u32::from_str_radix(digits, 16).ok()?;
+    let most = 16u32.pow(u32::try_from(digits.len()).ok()?) - 1;
+    // Rounded to the nearest whole number.
+    u8::try_from((value * 255 + most / 2) / most).ok()
 }
 
 fn find(bytes: &[u8], part: &[u8]) -> Option<usize> {
@@ -220,6 +286,10 @@ mod tests {
 
     /// An answer to `ASK_DEVICE_ATTRIBUTES`, as kitty sends it.
     const ATTRIBUTES_ANSWER: &str = "\x1b[?62;c";
+
+    /// An answer to `ASK_TEXT_COLOR`, as kitty sends it, & the color it holds.
+    const TEXT_COLOR_ANSWER: &str = "\x1b]10;rgb:1e1e/8080/ffff\x1b\\";
+    const TEXT_COLOR: [u8; 3] = [0x1e, 0x80, 0xff];
 
     fn check(chunks: &[&[u8]]) -> ImageCheck {
         let mut answers = AnswerReader::default();
@@ -234,10 +304,10 @@ mod tests {
     }
 
     #[test]
-    fn the_check_asks_about_a_picture_then_about_the_terminal() {
+    fn the_check_asks_about_a_picture_then_the_text_color_then_the_terminal() {
         let expected = format!(
             "{PICTURE_START}i={CHECK_PICTURE_ID},a=q,t=d,f=24,s=1,v=1;AAAA{STRING_END}\
-             {ASK_DEVICE_ATTRIBUTES}"
+             {ASK_TEXT_COLOR}{ASK_DEVICE_ATTRIBUTES}"
         );
 
         assert_eq!(check_codes(), expected);
@@ -245,7 +315,7 @@ mod tests {
 
     #[test]
     fn a_terminal_that_says_ok_can_show_pictures() {
-        let answers = joined(&[&picture_ok_answer(), ATTRIBUTES_ANSWER]);
+        let answers = joined(&[&picture_ok_answer(), TEXT_COLOR_ANSWER, ATTRIBUTES_ANSWER]);
 
         let result = check(&[&answers]);
 
@@ -253,9 +323,54 @@ mod tests {
             result,
             ImageCheck {
                 supported: true,
-                early_input: Vec::new()
+                early_input: Vec::new(),
+                text_color: Some(TEXT_COLOR),
             }
         );
+    }
+
+    #[test]
+    fn a_text_color_answer_ended_by_bell_is_read() {
+        let answer = format!("{TEXT_COLOR_START}rgb:1e1e/8080/ffff{BELL}");
+        let answers = joined(&[&answer, ATTRIBUTES_ANSWER]);
+
+        let result = check(&[&answers]);
+
+        assert_eq!(result.text_color, Some(TEXT_COLOR));
+        assert!(result.early_input.is_empty());
+    }
+
+    #[test]
+    fn a_text_color_that_cannot_be_read_is_dropped_not_typed() {
+        let answer = format!("{TEXT_COLOR_START}cmyk:1/2/3/4{STRING_END}");
+        let answers = joined(&[&answer, ATTRIBUTES_ANSWER]);
+
+        let result = check(&[&answers]);
+
+        assert_eq!(result.text_color, None);
+        assert!(result.early_input.is_empty());
+    }
+
+    #[test]
+    fn color_numbers_of_any_length_are_scaled_to_255() {
+        assert_eq!(read_color("rgb:ffff/8080/0000"), Some([255, 128, 0]));
+        assert_eq!(read_color("rgb:ff/80/00"), Some([255, 128, 0]));
+        assert_eq!(read_color("rgb:f/8/0"), Some([255, 136, 0]));
+    }
+
+    #[test]
+    fn a_color_that_is_not_three_hex_numbers_is_not_read() {
+        for text in [
+            "rgb:ff/ff",
+            "rgb:ff/ff/ff/ff",
+            "rgb:ff//ff",
+            "rgb:fffff/ff/ff",
+            "rgb:+f/ff/ff",
+            "rgb:gg/ff/ff",
+            "ff/ff/ff",
+        ] {
+            assert_eq!(read_color(text), None, "{text}");
+        }
     }
 
     #[test]
@@ -277,12 +392,13 @@ mod tests {
 
     #[test]
     fn answers_split_across_reads_are_still_read() {
-        let answers = joined(&[&picture_ok_answer(), ATTRIBUTES_ANSWER]);
+        let answers = joined(&[&picture_ok_answer(), TEXT_COLOR_ANSWER, ATTRIBUTES_ANSWER]);
         let chunks: Vec<&[u8]> = answers.chunks(1).collect();
 
         let result = check(&chunks);
 
         assert!(result.supported);
+        assert_eq!(result.text_color, Some(TEXT_COLOR));
         assert!(result.early_input.is_empty());
     }
 

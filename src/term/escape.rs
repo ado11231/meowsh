@@ -101,6 +101,19 @@ pub const DEVICE_ATTRIBUTES: u8 = b'c';
 /// Starts the answer to `ASK_DEVICE_ATTRIBUTES`.
 pub const DEVICE_ATTRIBUTES_START: &str = "\x1b[?";
 
+/// Asks the terminal for its text color: `OSC 10 ; ? ST`.
+pub const ASK_TEXT_COLOR: &str = "\x1b]10;?\x1b\\";
+
+/// Starts the answer to `ASK_TEXT_COLOR`: `OSC 10 ; rgb:RRRR/GGGG/BBBB`, ended by
+/// `STRING_END` or `BELL`.
+pub const TEXT_COLOR_START: &str = "\x1b]10;";
+
+/// Comes before the red, green & blue numbers in a color answer.
+pub const RGB_COLOR_PREFIX: &str = "rgb:";
+
+/// Splits the red, green & blue numbers in a color answer.
+pub const RGB_COLOR_SPLIT: char = '/';
+
 /// Holds the screen still until `RELEASE_SCREEN`, so a drawing shows all at once. It is
 /// `CSI ? SYNCHRONIZED_OUTPUT_MODE h`.
 pub const HOLD_SCREEN: &str = "\x1b[?2026h";
