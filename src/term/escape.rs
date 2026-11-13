@@ -108,6 +108,12 @@ pub const ASK_TEXT_COLOR: &str = "\x1b]10;?\x1b\\";
 /// `STRING_END` or `BELL`.
 pub const TEXT_COLOR_START: &str = "\x1b]10;";
 
+/// Asks the terminal for its background color: `OSC 11 ; ? ST`.
+pub const ASK_BACKGROUND_COLOR: &str = "\x1b]11;?\x1b\\";
+
+/// Starts the answer to `ASK_BACKGROUND_COLOR`, written like the text color answer.
+pub const BACKGROUND_COLOR_START: &str = "\x1b]11;";
+
 /// Comes before the red, green & blue numbers in a color answer.
 pub const RGB_COLOR_PREFIX: &str = "rgb:";
 
