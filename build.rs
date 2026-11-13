@@ -1,5 +1,5 @@
-//! Reads the settings & checks the frames in `assets/animations/`, then writes them as Rust
-//! for `src/anim.rs`. A broken setting or frame stops the build with a message that names
+//! Reads the settings & checks the frames in `assets/animations/`, then writes them as Rust:
+//! the settings for `src/anim.rs` & the packed frames for `src/art/library.rs`. A broken setting or frame stops the build with a message that names
 //! the file. The frame rules are in docs/ANIMATION.md.
 
 use anyhow::{Context, Result, bail, ensure};
@@ -20,6 +20,9 @@ const ANIM_FILE: &str = "anim.toml";
 
 /// The file written into the build folder & included by `src/anim.rs`.
 const OUTPUT_FILE: &str = "animations.rs";
+
+/// The file written into the build folder & included by `src/art/library.rs`.
+const PACKED_FILE: &str = "packed_frames.rs";
 
 /// Bytes per pixel in a frame: red, green, blue & how see through it is.
 const BYTES_PER_PIXEL: usize = 4;
@@ -70,10 +73,23 @@ fn main() -> Result<()> {
     let animations = read_animations(folder, &canvas)?;
 
     let output_folder = std::env::var_os("OUT_DIR").context("OUT_DIR is not set")?;
-    let output_path = Path::new(&output_folder).join(OUTPUT_FILE);
-    fs::write(&output_path, write_rust(&canvas, &animations)?)
-        .with_context(|| format!("could not write {}", output_path.display()))?;
+    let output_folder = Path::new(&output_folder);
+    write_file(
+        &output_folder.join(OUTPUT_FILE),
+        &write_rust(&canvas, &animations)?,
+    )?;
+    let package_folder =
+        std::env::var_os("CARGO_MANIFEST_DIR").context("CARGO_MANIFEST_DIR is not set")?;
+    write_file(
+        &output_folder.join(PACKED_FILE),
+        &write_packed(&Path::new(&package_folder).join(folder), &animations)?,
+    )?;
     Ok(())
+}
+
+/// Writes one generated file, naming it if that fails.
+fn write_file(path: &Path, text: &str) -> Result<()> {
+    fs::write(path, text).with_context(|| format!("could not write {}", path.display()))
 }
 
 /// Reads & checks `canvas.toml`.
@@ -280,6 +296,29 @@ fn write_rust(canvas: &CanvasSettings, animations: &[FoundAnimation]) -> Result<
             "    Animation {{ name: {name:?}, frame_count: {frame_count}, frame_ms: {}, loops: {}, step: {}, recolor: {}, frame_ms_each: {frame_ms_each} }},",
             settings.frame_ms, settings.loops, settings.step, settings.recolor
         )?;
+    }
+    writeln!(rust, "];")?;
+    Ok(rust)
+}
+
+/// Writes every frame as `include_bytes!`, so the PNGs are packed into the program.
+fn write_packed(folder: &Path, animations: &[FoundAnimation]) -> Result<String> {
+    let mut rust = String::new();
+    writeln!(rust, "const PACKED: &[PackedAnimation] = &[")?;
+    for animation in animations {
+        writeln!(
+            rust,
+            "    PackedAnimation {{ name: {:?}, pngs: &[",
+            animation.name
+        )?;
+        for index in 0..animation.frame_count {
+            let path = folder.join(&animation.name).join(frame_file_name(index));
+            let path = path
+                .to_str()
+                .with_context(|| format!("{}: path is not plain text", path.display()))?;
+            writeln!(rust, "        include_bytes!({path:?}),")?;
+        }
+        writeln!(rust, "    ] }},")?;
     }
     writeln!(rust, "];")?;
     Ok(rust)
