@@ -2,7 +2,8 @@
 
 use super::events::{Event, start_input_thread, start_output_thread, start_resize_thread};
 use super::{TerminationSignal, catch_panic};
-use crate::art::placeholder::{Still, placeholder};
+use crate::art::placeholder::placeholder;
+use crate::art::still::Still;
 use crate::env::{MEOWSH_TTY, TERM_PROGRAM};
 use crate::term::bar::{BarGuard, Layout};
 use crate::term::filter::OutputFilter;

@@ -1,5 +1,7 @@
 //! A plain stand in for the cat: a white oval, made in code, used until real frames exist.
 
+use super::still::Still;
+
 /// The placeholder's width in pixels.
 pub const PLACEHOLDER_WIDTH: u32 = 24;
 
@@ -11,17 +13,6 @@ const INSIDE: [u8; 4] = [255, 255, 255, 255];
 
 /// The color outside the oval: fully see through.
 const OUTSIDE: [u8; 4] = [0, 0, 0, 0];
-
-/// A still picture with its pixels.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Still {
-    /// Width in pixels.
-    pub width: u32,
-    /// Height in pixels.
-    pub height: u32,
-    /// `width * height` pixels in RGBA order, row by row from the top left.
-    pub rgba: Vec<u8>,
-}
 
 /// The placeholder picture: a white oval that fills its box, on a see through background.
 pub fn placeholder() -> Still {
