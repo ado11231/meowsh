@@ -77,9 +77,10 @@ floor = 204
 
 ### Color
 
-* Draw the cat in pure white. Meowsh changes white to the terminal's text color.
-* On a dark theme that stays white, so the cat looks the way you drew it. On a light theme it turns dark, so it does not vanish.
-* Grey edges & details keep their shade in proportion.
+* Draw the cat in pure white, with black details such as the eyes.
+* Meowsh changes white to the terminal's text color & black to its background color. Greys land in between.
+* On a dark theme the cat looks the way you drew it. On a light theme it turns dark with light eyes, so it does not vanish.
+* If the terminal does not say its colors, the cat keeps the colors you drew.
 * A prop that keeps its own colors, such as a red ball, sets `recolor = false` in its `anim.toml`.
 
 ## Folder Layout

@@ -141,7 +141,7 @@ flowchart TD
 * It fits the bar, scaled to your font size.
 * It is drawn facing right. Meowsh flips it to face left.
 * Every animation uses the same cat, the same size & the same floor line.
-* It is drawn white. Meowsh recolors it to your terminal's text color, so it looks white on a dark theme & stays visible on a light one.
+* It is drawn white with black eyes. Meowsh recolors it to your terminal's text & background colors, so it looks the same on a dark theme & turns dark with light eyes on a light one.
 * Each frame is 309 by 215 pixels, with the feet on row 204, shown in a two row bar.
 * Drawn & posed in Blender with Grease Pencil.
 

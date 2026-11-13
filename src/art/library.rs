@@ -1,7 +1,9 @@
 //! Every frame of every animation, read from the PNGs packed into the program by `build.rs`.
 //! Loaded once at startup, then looked up by animation name & frame number.
 
+use super::recolor::{Colors, recolor};
 use super::still::Still;
+use crate::anim;
 use anyhow::{Context, Result, ensure};
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -24,11 +26,14 @@ pub struct Library {
 }
 
 impl Library {
-    /// Reads every packed frame.
-    pub fn load() -> Result<Self> {
+    /// Reads every packed frame. With the terminal's colors, frames of animations that have
+    /// `recolor` on are changed to them. Without, every frame keeps the colors it was drawn in.
+    pub fn load(colors: Option<Colors>) -> Result<Self> {
         let mut animations = HashMap::new();
         for packed in PACKED {
-            let frames = packed
+            let settings = anim::find(packed.name)
+                .with_context(|| format!("{} has frames but no settings", packed.name))?;
+            let mut frames = packed
                 .pngs
                 .iter()
                 .enumerate()
@@ -37,6 +42,13 @@ impl Library {
                         .with_context(|| format!("could not read frame {index} of {}", packed.name))
                 })
                 .collect::<Result<Vec<Still>>>()?;
+            if let Some(colors) = colors
+                && settings.recolor
+            {
+                for frame in &mut frames {
+                    recolor(frame, colors);
+                }
+            }
             animations.insert(packed.name, frames);
         }
         Ok(Self { animations })
@@ -119,7 +131,7 @@ mod tests {
 
     #[test]
     fn every_animation_loads_all_its_frames_at_the_canvas_size() -> Result<()> {
-        let library = Library::load()?;
+        let library = Library::load(None)?;
 
         for animation in ANIMATIONS {
             for index in 0..animation.frame_count {
@@ -146,8 +158,36 @@ mod tests {
     }
 
     #[test]
+    fn colors_change_the_frames_of_animations_that_ask_for_it() -> Result<()> {
+        let colors = Colors {
+            text: [250, 0, 100],
+            background: [0, 250, 100],
+        };
+        let as_drawn = Library::load(None)?;
+        let colored = Library::load(Some(colors))?;
+
+        for animation in ANIMATIONS {
+            for index in 0..animation.frame_count {
+                let mut expected = as_drawn
+                    .frame(animation.name, index)
+                    .with_context(|| format!("{} frame {index} is missing", animation.name))?
+                    .clone();
+                if animation.recolor {
+                    recolor(&mut expected, colors);
+                }
+                ensure!(
+                    colored.frame(animation.name, index) == Some(&expected),
+                    "{} frame {index} has the wrong colors",
+                    animation.name
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn an_unknown_animation_has_no_frames() -> Result<()> {
-        let library = Library::load()?;
+        let library = Library::load(None)?;
 
         ensure!(library.frame("not_an_animation", 0).is_none());
         Ok(())

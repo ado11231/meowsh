@@ -261,9 +261,9 @@ stateDiagram-v2
 
 ### Once, At Startup
 
-* Ask the terminal for its text color.
+* Ask the terminal for its text & background colors.
 * Load every frame.
-* Change white to the text color, unless the animation turns that off. Make a left facing copy.
+* Change white to the text color & black to the background color, unless the animation turns that off. Make a left facing copy.
 * Keep them all in memory, ready to send.
 * After that, the app asks for a picture by animation name & frame number. Nothing is loaded twice.
 
