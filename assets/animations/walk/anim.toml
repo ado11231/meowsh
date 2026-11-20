@@ -1,0 +1,5 @@
+# Each pose lasts one tenth of a second.
+frame_ms = 100
+loop = true
+step = 6
+recolor = true
