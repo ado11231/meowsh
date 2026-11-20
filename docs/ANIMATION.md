@@ -174,7 +174,7 @@ cargo run -- preview walk
 | `wake` | No | No | To draw |
 | `sit` | Yes | No | Drawn |
 | `sit_down` | No | No | To draw |
-| `walk` | Yes | Yes | To draw |
+| `walk` | Yes | Yes | Drawn |
 | `run` | Yes | Yes | To draw |
 | `turn` | No | No | To draw |
 | `eat` | Yes | No | To draw |
