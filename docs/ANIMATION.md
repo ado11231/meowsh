@@ -170,7 +170,7 @@ cargo run -- preview walk
 
 | Animation | Loops | Moves | Status |
 | --- | --- | --- | --- |
-| `sleep` | Yes | No | To draw |
+| `sleep` | Yes | No | Drawn |
 | `wake` | No | No | To draw |
 | `sit` | Yes | No | Drawn |
 | `sit_down` | No | No | To draw |
