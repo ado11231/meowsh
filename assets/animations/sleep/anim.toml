@@ -1,0 +1,4 @@
+frame_ms = 333
+loop = true
+step = 0
+recolor = true
