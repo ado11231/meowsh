@@ -2,11 +2,12 @@
 
 * The order Meowsh gets built in.
 * A phase is complete only when its **Done when** line is true in kitty & in the VS Code terminal, on macOS.
-* Last updated November 13, 2026.
+* Last updated November 22, 2026.
 
 ## Contents
 
 * [Status](#status)
+* [Versions](#versions)
 * [Two Tracks](#two-tracks)
 * [Phases](#phases)
 * [Art Track](#art-track)
@@ -38,6 +39,14 @@ flowchart LR
     classDef default stroke:#c97d3a
     linkStyle default stroke:#c97d3a
 ```
+
+## Versions
+
+* **v0.1** after Phase 4, with `sit`, `walk` & `sleep`. Meals & play use `sit` until their art is drawn. Published to crates.io, with a short README.
+* **v0.2** after Phase 5, with the reactions & their art.
+* **v0.3** after Phase 6, with the commands, `eat` & the bowl.
+* **v1.0** when `sit`, `walk`, `sleep`, `wake`, `sit_down`, `eat`, the bowl, `look_up`, `flinch` & `perk_up` are drawn & Meowsh is tested on Linux.
+* `run`, `turn`, play & `purr` come after v1.0.
 
 ## Two Tracks
 
