@@ -25,6 +25,12 @@ pub const VSCODE_TERM_PROGRAM: &str = "vscode";
 /// matches the shell's own terminal, so Meowsh never starts inside itself.
 pub const MEOWSH_TTY: &str = "MEOWSH_TTY";
 
+/// For testing: the time the cat's clock starts at, such as `06:55`.
+pub const MEOWSH_CLOCK: &str = "MEOWSH_CLOCK";
+
+/// For testing: how many times faster than real time the cat's clock runs, such as `60`.
+pub const MEOWSH_CLOCK_SPEED: &str = "MEOWSH_CLOCK_SPEED";
+
 /// Reads the user's shell path.
 pub fn shell() -> Result<OsString> {
     std::env::var_os(SHELL).context("SHELL is not set")

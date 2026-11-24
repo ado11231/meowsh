@@ -1,5 +1,6 @@
 //! What plays in the bar: the cat living its day, or one animation for checking art.
 
+use super::clock::Clock;
 use crate::cat::Cat;
 use crate::cat::player::Player;
 use crate::scene::{Facing, Scene, ScenePicture};
@@ -10,8 +11,8 @@ const PREVIEW_X: u32 = 0;
 
 /// What plays in the bar.
 pub enum Show {
-    /// The cat, picking what to do.
-    Cat(Cat),
+    /// The cat, picking what to do by `clock`.
+    Cat { cat: Cat, clock: Clock },
     /// One animation, played in place at the left end, for `meowsh preview`.
     Preview(Player),
 }
@@ -21,7 +22,7 @@ impl Show {
     /// `bar_width` art pixels wide.
     pub fn scene(&mut self, now: Duration, bar_width: u32) -> Scene {
         match self {
-            Self::Cat(cat) => cat.update(now, bar_width),
+            Self::Cat { cat, clock } => cat.update(clock.time(now), bar_width),
             Self::Preview(player) => Scene {
                 pictures: vec![ScenePicture {
                     animation: player.animation().name,
@@ -37,7 +38,7 @@ impl Show {
     /// something happens.
     pub fn until_next_change(&self, now: Duration) -> Option<Duration> {
         match self {
-            Self::Cat(cat) => cat.until_next_change(now),
+            Self::Cat { cat, .. } => cat.until_next_change(now),
             Self::Preview(player) => player.until_next_frame(now),
         }
     }

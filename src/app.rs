@@ -1,11 +1,13 @@
 //! Joins the parts together and runs the shell inside Meowsh. It is the only part that may
 //! use `term`, `cat`, and `art` together.
 //!
+//! * `clock`: the cat's clock, real or made up for testing.
 //! * `events`: the threads that read keys, read shell output, and watch signals.
 //! * `pictures`: turns the cat's scene into pictures for the painter.
 //! * `session`: starts the shell in a PTY and runs the main loop.
 //! * `show`: what plays in the bar, the cat or one animation.
 
+mod clock;
 mod events;
 mod pictures;
 mod session;
@@ -15,6 +17,7 @@ use crate::anim::{self, Animation};
 use crate::art::library::Library;
 use crate::art::recolor::Colors;
 use crate::cat::Cat;
+use crate::cat::day::Schedule;
 use crate::cat::player::Player;
 use crate::env;
 use crate::store::{self, image_hint};
@@ -25,6 +28,7 @@ use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 use std::time::Duration;
 
+use clock::Clock;
 pub use session::Session;
 use show::Show;
 
@@ -93,7 +97,10 @@ fn run(
         let show = match preview {
             // The show's time starts with the session, at zero.
             Some(animation) => Show::Preview(Player::start(animation, Duration::ZERO)),
-            None => Show::Cat(Cat::new()?),
+            None => Show::Cat {
+                cat: Cat::new(Schedule::default())?,
+                clock: Clock::from_env()?,
+            },
         };
         Ok((library, show))
     });
