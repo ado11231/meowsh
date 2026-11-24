@@ -89,6 +89,18 @@ impl BarArea {
         })
     }
 
+    /// The bar's width, in the pixels of a picture `picture_height` pixels tall. Pictures
+    /// are scaled to the bar's height, so this is how many of their pixels fit across it.
+    pub fn width_in_picture_pixels(self, picture_height: u32) -> u32 {
+        let bar_width = u64::from(self.columns) * u64::from(self.cell_width);
+        let bar_height = u64::from(self.rows()) * u64::from(self.cell_height);
+        let width = (bar_width * u64::from(picture_height))
+            .checked_div(bar_height)
+            .unwrap_or(0);
+        // A window is far less than 4 billion pixels wide, so this always fits.
+        u32::try_from(width).unwrap_or(u32::MAX)
+    }
+
     fn rows(self) -> u16 {
         self.last_row - self.first_row + 1
     }
@@ -485,6 +497,13 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn the_bar_width_is_given_in_the_pictures_own_pixels() {
+        // The bar is 800 by 40 screen pixels. A 215 pixel tall picture is scaled down to 40,
+        // so 800 screen pixels across are 4300 of its pixels.
+        assert_eq!(AREA.width_in_picture_pixels(215), 4300);
     }
 
     #[test]

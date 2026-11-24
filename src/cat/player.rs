@@ -30,6 +30,11 @@ impl Player {
         }
     }
 
+    /// The animation being played.
+    pub fn animation(&self) -> &'static Animation {
+        self.animation
+    }
+
     /// What to show at `now`.
     pub fn at(&self, now: Duration) -> Playing {
         self.position(now).0
@@ -44,6 +49,29 @@ impl Player {
         ))
     }
 
+    /// How many times the frame changed between the start & `now`. Each new frame counts,
+    /// also when a loop starts again. An animation played once stops counting at its end.
+    pub fn frames_passed(&self, now: Duration) -> u64 {
+        let frame = self.at(now).frame as u64;
+        let cycle = self.cycle_ms();
+        if !self.animation.loops || cycle == 0 {
+            return frame;
+        }
+        let elapsed = now.saturating_sub(self.started).as_millis();
+        // A loop is far shorter than a day, so the number of loops always fits.
+        let loops_done = u64::try_from(elapsed / cycle).unwrap_or(u64::MAX);
+        loops_done
+            .saturating_mul(self.animation.frame_count as u64)
+            .saturating_add(frame)
+    }
+
+    /// How long it takes to show every frame once, in milliseconds.
+    fn cycle_ms(&self) -> u128 {
+        (0..self.animation.frame_count)
+            .map(|index| self.frame_ms(index))
+            .sum()
+    }
+
     /// What to show at `now`, & how many milliseconds until a different frame shows.
     fn position(&self, now: Duration) -> (Playing, Option<u128>) {
         let frame_count = self.animation.frame_count;
@@ -52,7 +80,7 @@ impl Player {
             frame: last_frame,
             done: true,
         };
-        let total: u128 = (0..frame_count).map(|index| self.frame_ms(index)).sum();
+        let total = self.cycle_ms();
         // The build lets in no animation without frames or with a time of 0, but dividing
         // by 0 below would crash, so this is checked anyway.
         if total == 0 {
@@ -188,6 +216,16 @@ mod tests {
         assert_eq!(next_frame_at(&THREE_FRAMES_ONCE, 150), Some(ms(50)));
         assert_eq!(next_frame_at(&THREE_FRAMES_ONCE, 250), None);
         assert_eq!(next_frame_at(&THREE_FRAMES_ONCE, 10_000), None);
+    }
+
+    #[test]
+    fn frames_passed_keeps_counting_through_loops_but_not_past_the_end() {
+        let looping = Player::start(&THREE_FRAMES, ms(1000));
+        let once = Player::start(&THREE_FRAMES_ONCE, ms(1000));
+
+        assert_eq!(looping.frames_passed(ms(1000 + 99)), 0);
+        assert_eq!(looping.frames_passed(ms(1000 + 2 * 300 + 100)), 7);
+        assert_eq!(once.frames_passed(ms(1000 + 10_000)), 2);
     }
 
     #[test]

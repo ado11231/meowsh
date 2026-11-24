@@ -4,23 +4,29 @@
 //! * `events`: the threads that read keys, read shell output, and watch signals.
 //! * `pictures`: turns the cat's scene into pictures for the painter.
 //! * `session`: starts the shell in a PTY and runs the main loop.
+//! * `show`: what plays in the bar, the cat or one animation.
 
 mod events;
 mod pictures;
 mod session;
+mod show;
 
-use crate::anim;
+use crate::anim::{self, Animation};
 use crate::art::library::Library;
 use crate::art::recolor::Colors;
+use crate::cat::Cat;
+use crate::cat::player::Player;
 use crate::env;
 use crate::store::{self, image_hint};
 use crate::term::image_check::check_images;
 use crate::term::pty::{build_shell_command, run_shell_directly};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
+use std::time::Duration;
 
 pub use session::Session;
+use show::Show;
 
 /// The session was stopped by a signal such as SIGTERM.
 #[derive(Debug)]
@@ -38,13 +44,13 @@ impl std::error::Error for TerminationSignal {}
 ///
 /// `shell` is the shell to run. When it is missing, the user's `SHELL` is used.
 pub fn start(shell: Option<OsString>, login: bool) -> Result<ExitCode> {
-    run(shell, login, RESTING_ANIMATION)
+    run(shell, login, None)
 }
 
 /// Runs the user's shell inside Meowsh with one animation playing in the bar, for checking
 /// art. Unlike `start`, a name with no animation is an error, so a typo is not missed.
 pub fn preview(name: &str) -> Result<ExitCode> {
-    if anim::find(name).is_none() {
+    let Some(animation) = anim::find(name) else {
         let names: Vec<&str> = anim::ANIMATIONS
             .iter()
             .map(|animation| animation.name)
@@ -53,13 +59,17 @@ pub fn preview(name: &str) -> Result<ExitCode> {
             "there is no animation named {name}. There are: {}",
             names.join(", ")
         );
-    }
-    run(None, false, name)
+    };
+    run(None, false, Some(animation))
 }
 
-/// Runs `shell` inside Meowsh with the animation named `animation` playing in the bar, or
-/// runs it directly if Meowsh cannot wrap it.
-fn run(shell: Option<OsString>, login: bool, animation: &str) -> Result<ExitCode> {
+/// Runs `shell` inside Meowsh with the cat in the bar, or `preview` playing in its place,
+/// or runs it directly if Meowsh cannot wrap it.
+fn run(
+    shell: Option<OsString>,
+    login: bool,
+    preview: Option<&'static Animation>,
+) -> Result<ExitCode> {
     let shell_path = match shell {
         Some(path) => path,
         None => env::shell()?,
@@ -80,11 +90,14 @@ fn run(shell: Option<OsString>, login: bool, animation: &str) -> Result<ExitCode
         _ => None,
     };
     let art = Library::load(colors).and_then(|library| {
-        let animation =
-            anim::find(animation).with_context(|| format!("there is no {animation} animation"))?;
-        Ok((library, animation))
+        let show = match preview {
+            // The show's time starts with the session, at zero.
+            Some(animation) => Show::Preview(Player::start(animation, Duration::ZERO)),
+            None => Show::Cat(Cat::new()?),
+        };
+        Ok((library, show))
     });
-    let (library, animation) = match art {
+    let (library, show) = match art {
         Ok(art) => art,
         Err(error) => return fall_back(&error, &shell_path, login),
     };
@@ -93,11 +106,8 @@ fn run(shell: Option<OsString>, login: bool, animation: &str) -> Result<ExitCode
         Err(error) => return fall_back(&error, &shell_path, login),
     };
     session.pass_on_early_input(&image_check.early_input)?;
-    session.run(&library, animation)
+    session.run(&library, show)
 }
-
-/// The animation played in the bar, until the cat picks its own.
-const RESTING_ANIMATION: &str = "sit";
 
 /// Shown once when the terminal said no to pictures. Each stays on one line.
 pub const IMAGE_HINT: &str = "meowsh: this terminal cannot show pictures, so the cat stays away";
@@ -144,6 +154,7 @@ pub fn catch_panic<T>(message: &'static str, operation: impl FnOnce() -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
     use std::io::{self, ErrorKind};
 
     #[test]

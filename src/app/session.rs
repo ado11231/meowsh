@@ -2,12 +2,11 @@
 
 use super::events::{Event, start_input_thread, start_output_thread, start_resize_thread};
 use super::pictures::bar_pictures;
+use super::show::Show;
 use super::{TerminationSignal, catch_panic};
-use crate::anim::Animation;
+use crate::anim::CANVAS;
 use crate::art::library::Library;
-use crate::cat::player::Player;
 use crate::env::{MEOWSH_TTY, TERM_PROGRAM};
-use crate::scene::{Facing, Scene, ScenePicture};
 use crate::term::bar::{BarGuard, Layout};
 use crate::term::filter::OutputFilter;
 use crate::term::painter::{BarArea, DrawingWay, Painter};
@@ -33,9 +32,6 @@ const DRAW_PAUSE: Duration = Duration::from_millis(30);
 
 /// The error when every helper thread is gone before the shell's output ended.
 const QUEUE_CLOSED: &str = "session event queue closed unexpectedly";
-
-/// How far from the left end of the bar the cat stands, in art pixels.
-const CAT_X: u32 = 0;
 
 /// A running shell, with the terminal in raw mode until the session is dropped.
 pub struct Session {
@@ -102,9 +98,9 @@ impl Session {
             .context("could not pass early keys to the shell")
     }
 
-    /// Runs the session until the shell exits, playing `animation` in the bar, and returns the
-    /// shell's exit code.
-    pub fn run(mut self, library: &Library, animation: &'static Animation) -> Result<ExitCode> {
+    /// Runs the session until the shell exits, playing `show` in the bar, and returns the
+    /// shell's exit code. The show's time starts now.
+    pub fn run(mut self, library: &Library, mut show: Show) -> Result<ExitCode> {
         let (sender, receiver) = sync_channel(EVENT_QUEUE_SIZE);
         // Each thread needs its own sender. Cloning a sender does not copy any events.
         let mut resize_guard = start_resize_thread(self.signals, sender.clone())?;
@@ -114,7 +110,6 @@ impl Session {
         let way = DrawingWay::for_terminal(std::env::var_os(TERM_PROGRAM).as_deref());
         let mut painter = Painter::new(way);
         let clock = Instant::now();
-        let player = Player::start(animation, clock.elapsed());
 
         let finished = forward_session(
             self.reader,
@@ -138,20 +133,19 @@ impl Session {
                 if wiped {
                     painter.bar_wiped();
                 }
-                let now = clock.elapsed();
-                let scene = Scene {
-                    pictures: vec![ScenePicture {
-                        animation: animation.name,
-                        frame: player.at(now).frame,
-                        x: CAT_X,
-                        facing: Facing::Right,
-                    }],
-                };
-                let pictures = bar_pictures(&scene, library)?;
                 let mut codes = String::new();
+                let Some(bar) = area else {
+                    // The bar is off, so the cat waits until it is back.
+                    painter.paint(&[], None, &mut codes)?;
+                    write_drawing(output, &codes)?;
+                    return Ok(None);
+                };
+                let now = clock.elapsed();
+                let scene = show.scene(now, bar.width_in_picture_pixels(CANVAS.height));
+                let pictures = bar_pictures(&scene, library)?;
                 painter.paint(&pictures, area, &mut codes)?;
                 write_drawing(output, &codes)?;
-                Ok(player.until_next_frame(now))
+                Ok(show.until_next_change(now))
             },
         );
         // In kitty pictures float above the text, so they would stay on screen after Meowsh
@@ -317,6 +311,7 @@ pub fn draw_nothing<W>(_output: &mut W, _wiped: bool) -> Result<Option<Duration>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cat::player::Player;
     use crate::term::bar::{BAR_ROWS, limit_scrolling};
     use crate::term::escape::{CSI, ERASE_SCREEN, HOLD_SCREEN, RELEASE_SCREEN, SCROLL_REGION};
     use crate::term::pty::forward_output;
@@ -341,9 +336,10 @@ mod tests {
         command
     }
 
-    /// The sit animation, played in the session tests.
-    fn sit() -> Result<&'static Animation> {
-        crate::anim::find("sit").context("sit is missing")
+    /// `sit`, played in place in the session tests.
+    fn sit() -> Result<Show> {
+        let sit = crate::anim::find("sit").context("sit is missing")?;
+        Ok(Show::Preview(Player::start(sit, Duration::ZERO)))
     }
 
     fn raw_mode_enabled() -> Result<bool> {
