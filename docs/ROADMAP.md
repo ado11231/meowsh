@@ -2,7 +2,7 @@
 
 * The order Meowsh gets built in.
 * A phase is complete only when its **Done when** line is true in kitty & in the VS Code terminal, on macOS.
-* Last updated November 22, 2026.
+* Last updated November 24, 2026.
 
 ## Contents
 
@@ -21,7 +21,7 @@
 | 1 | A wrapper you cannot notice | Done |
 | 2 | The bar, with one still picture in it | Done |
 | 3 | Animations from folders & a preview command | Done |
-| 4 | The cat's day & resting actions | Planned |
+| 4 | The cat's day & resting actions | In progress |
 | 5 | Reactions | Planned |
 | 6 | Commands: treat, pet, quiet, come, name | Planned |
 | 7 | A public release | Planned |
