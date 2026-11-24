@@ -193,7 +193,7 @@ flowchart TD
 
 | Way | Terminals | How It Draws |
 | --- | --- | --- |
-| **Layered** | kitty & any terminal not named below | Pictures float above the text. Send the new picture first, while the cursor is still where the shell left it, then place it in the bar & remove the old one by its number. Never erase the bar's cells or hold the screen. |
+| **Layered** | kitty & any terminal not named below | Pictures float above the text. Send each frame once, while the cursor is still where the shell left it. The terminal keeps it, so after that it is only placed in the bar & the old one is taken off. Never erase the bar's cells or hold the screen. |
 | **In the cells** | VS Code (`TERM_PROGRAM=vscode`) | Pictures are burned into the cells & removing one by its number leaves it on screen. Hold the screen, erase the bar's cells, show the new picture, remove the old one, then let go. |
 
 * Holding the screen means synchronized output (`?2026`). In VS Code it stops flicker. In kitty it causes flicker & trails, so the layered way never uses it.
@@ -356,9 +356,9 @@ flowchart TD
 | --- | --- |
 | An escape code can arrive split in two pieces. | Hold back the first piece until the rest arrives. |
 | VS Code burns pictures into the cells, so removing one by its number leaves a trail. | Use the in the cells way in VS Code. See [The Painter](#the-painter). |
-| kitty removes pictures when the screen is cleared. | Draw again after any clear. |
+| kitty removes pictures when the screen is cleared or reset. | Send the frames again & draw after any clear. |
 | Smooth movement needs steps smaller than one character. | Shift the picture inside a character cell. Works in kitty & VS Code. |
-| Big frames are slow to send. | Keep frames small. See [ANIMATION.md](ANIMATION.md#frame-rules). |
+| Big frames are slow to send. | Send each frame once in kitty & keep frames small. See [ANIMATION.md](ANIMATION.md#frame-rules). |
 | Coding agents redraw the screen often. | Draw the bar again after any output that could have touched it. |
 | Drawing while a program is mid redraw can tear the screen. | Wait for it to finish. |
 

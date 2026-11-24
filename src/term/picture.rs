@@ -29,6 +29,9 @@ const PLACE: &str = "a=p";
 /// Removes a picture by its number & frees what the terminal kept of it.
 const REMOVE_BY_ID: &str = "a=d,d=I";
 
+/// Removes one placement of a picture, keeping the picture so it can be placed again.
+const REMOVE_PLACEMENT: &str = "a=d,d=i";
+
 /// The pixels are 8 bit RGBA.
 const RGBA_FORMAT: &str = "f=32";
 
@@ -88,9 +91,10 @@ pub fn send_codes(id: u32, pixels: Pixels<'_>) -> Result<String> {
 }
 
 /// The code that shows picture number `id`, sent before by `send_codes`, at the cursor.
-pub fn place_code(id: u32, placement: Placement) -> String {
+/// Placing it again with the same `placement_id` moves it instead of adding a second copy.
+pub fn place_code(id: u32, placement_id: u32, placement: Placement) -> String {
     format!(
-        "{PICTURE_START}{PLACE},i={id},c={},r={},X={},{KEEP_CURSOR},{NO_ANSWER}{STRING_END}",
+        "{PICTURE_START}{PLACE},i={id},p={placement_id},c={},r={},X={},{KEEP_CURSOR},{NO_ANSWER}{STRING_END}",
         placement.columns, placement.rows, placement.offset_x
     )
 }
@@ -133,6 +137,12 @@ fn pixel_codes(settings: &str, pixels: Pixels<'_>) -> Result<String> {
 /// The code that removes picture number `id` from the screen & from the terminal's memory.
 pub fn remove_code(id: u32) -> String {
     format!("{PICTURE_START}{REMOVE_BY_ID},i={id},{NO_ANSWER}{STRING_END}")
+}
+
+/// The code that takes one placement of picture number `id` off the screen. The terminal
+/// keeps the picture, so it can be placed again without sending it.
+pub fn remove_placement_code(id: u32, placement_id: u32) -> String {
+    format!("{PICTURE_START}{REMOVE_PLACEMENT},i={id},p={placement_id},{NO_ANSWER}{STRING_END}")
 }
 
 #[cfg(test)]
@@ -220,8 +230,8 @@ mod tests {
             )
         );
         assert_eq!(
-            place_code(9, PLACEMENT),
-            format!("{PICTURE_START}a=p,i=9,c=6,r=2,X=3,C=1,q=2{STRING_END}")
+            place_code(9, 1, PLACEMENT),
+            format!("{PICTURE_START}a=p,i=9,p=1,c=6,r=2,X=3,C=1,q=2{STRING_END}")
         );
         Ok(())
     }
@@ -242,6 +252,10 @@ mod tests {
         assert_eq!(
             remove_code(9),
             format!("{PICTURE_START}a=d,d=I,i=9,q=2{STRING_END}")
+        );
+        assert_eq!(
+            remove_placement_code(9, 2),
+            format!("{PICTURE_START}a=d,d=i,i=9,p=2,q=2{STRING_END}")
         );
     }
 }

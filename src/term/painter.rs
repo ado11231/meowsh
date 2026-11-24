@@ -8,10 +8,13 @@ use super::bar::{Layout, push_erase_bar};
 use super::escape::{
     CSI, CURSOR_POSITION, HOLD_SCREEN, RELEASE_SCREEN, RESTORE_CURSOR, SAVE_CURSOR,
 };
-use super::picture::{Pixels, Placement, place_code, remove_code, send_codes, show_codes};
+use super::picture::{
+    Pixels, Placement, place_code, remove_code, remove_placement_code, send_codes, show_codes,
+};
 use crate::env::VSCODE_TERM_PROGRAM;
 use anyhow::{Result, ensure};
 use portable_pty::PtySize;
+use std::collections::HashMap;
 use std::ffi::OsStr;
 
 /// The cell width used when the terminal does not say how big its cells are.
@@ -23,7 +26,8 @@ const DEFAULT_CELL_HEIGHT: u16 = 16;
 /// The most pictures the bar shows at once.
 pub const MAX_PICTURES: usize = 16;
 
-/// How many picture numbers each of the painter's two sets holds. At least `MAX_PICTURES`.
+/// How many picture numbers each of the two sets used for drawing in the cells holds. At
+/// least `MAX_PICTURES`.
 const PICTURE_ID_SET_SIZE: u32 = 16;
 
 /// The first picture number the painter uses. Numbers below it are left for other uses,
@@ -33,8 +37,9 @@ const FIRST_PICTURE_ID: u32 = 7710;
 /// How the terminal keeps pictures, which decides how they are drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DrawingWay {
-    /// Pictures float above the text, as in kitty. A new picture is sent while the cursor is
-    /// still where the shell left it, then placed in the bar, then the old one is removed.
+    /// Pictures float above the text, as in kitty. Each picture is sent once, while the
+    /// cursor is still where the shell left it, & the terminal keeps it. After that it is
+    /// only placed in the bar, which is a short code, & the old one is taken off.
     /// The bar's cells are never erased & the screen is never held, so the cursor only sits
     /// in the bar for the short placing code, & no cursor box flashes there.
     Layered,
@@ -152,11 +157,14 @@ pub struct Painter {
     /// The bar the last drawing was for.
     area: Option<BarArea>,
     drawn: Vec<Drawn>,
-    /// The numbers of the pictures on screen now.
+    /// The number of the picture on screen in each place, in the order they were handed in.
     drawn_ids: Vec<u32>,
-    /// Which of two sets of numbers the next drawing uses. They take turns, so the new
-    /// pictures never share a number with the old ones they replace.
+    /// Drawing in the cells only: which of two sets of numbers the next drawing uses. They
+    /// take turns, so the new pictures never share a number with the old ones they replace.
     second_set: bool,
+    /// Layered drawing only: the number the terminal keeps each picture under, by its
+    /// `content` number, so each picture is sent once & after that only placed.
+    sent: HashMap<u64, u32>,
     /// Whether the bar may have been wiped since the last drawing.
     wiped: bool,
 }
@@ -170,6 +178,7 @@ impl Painter {
             drawn: Vec::new(),
             drawn_ids: Vec::new(),
             second_set: false,
+            sent: HashMap::new(),
             wiped: false,
         }
     }
@@ -208,73 +217,140 @@ impl Painter {
             return Ok(());
         }
 
-        let Some(bar) = area else {
+        match area {
             // The rows belong to the shell now, so only the pictures are removed.
-            self.push_remove_old(output);
-            self.area = None;
-            self.drawn.clear();
-            self.wiped = false;
-            return Ok(());
-        };
+            None => self.push_remove_old(output),
+            Some(bar) => match self.way {
+                DrawingWay::Layered => self.paint_layered(pictures, bar, output)?,
+                DrawingWay::InCells => self.paint_in_cells(pictures, bar, output)?,
+            },
+        }
+        self.area = area;
+        self.drawn = if area.is_some() { wanted } else { Vec::new() };
+        self.wiped = false;
+        Ok(())
+    }
 
+    /// Sends the pictures the terminal does not have yet while the cursor is still where
+    /// the shell left it, then places them all in the bar.
+    fn paint_layered(
+        &mut self,
+        pictures: &[BarPicture<'_>],
+        bar: BarArea,
+        output: &mut String,
+    ) -> Result<()> {
+        if self.wiped {
+            // A wipe can be a reset or a switch to the other screen, which can lose the
+            // pictures the terminal kept. They are freed & sent again when next shown.
+            for (_, id) in self.sent.drain() {
+                output.push_str(&remove_code(id));
+            }
+            self.drawn_ids.clear();
+        }
+
+        // Built in full first, so an error leaves the painter as it was.
+        let mut newly_sent: HashMap<u64, u32> = HashMap::new();
+        let mut sending = String::new();
+        let mut placing = String::new();
+        let mut new_ids = Vec::with_capacity(pictures.len());
+        for (index, picture) in pictures.iter().enumerate() {
+            let known = self.sent.get(&picture.content);
+            let id = match known.or_else(|| newly_sent.get(&picture.content)) {
+                Some(&id) => id,
+                None => {
+                    let id = FIRST_PICTURE_ID + u32::try_from(self.sent.len() + newly_sent.len())?;
+                    sending.push_str(&send_codes(id, picture.pixels)?);
+                    newly_sent.insert(picture.content, id);
+                    id
+                }
+            };
+            let (column, placement) = bar.place(picture.pixels, picture.x)?;
+            push_move_to(&mut placing, bar, column);
+            placing.push_str(&place_code(id, placement_id(index), placement));
+            new_ids.push(id);
+        }
+
+        output.push_str(&sending);
+        output.push_str(SAVE_CURSOR);
+        output.push_str(&placing);
+        // A place that shows the same picture was moved by placing it again, so only places
+        // that now show another picture, or none, are removed.
+        for (index, &old_id) in self.drawn_ids.iter().enumerate() {
+            if new_ids.get(index) != Some(&old_id) {
+                output.push_str(&remove_placement_code(old_id, placement_id(index)));
+            }
+        }
+        output.push_str(RESTORE_CURSOR);
+
+        self.sent.extend(newly_sent);
+        self.drawn_ids = new_ids;
+        Ok(())
+    }
+
+    /// Holds the screen, erases the bar & sends every picture again, because pictures in
+    /// the cells cannot be moved.
+    fn paint_in_cells(
+        &mut self,
+        pictures: &[BarPicture<'_>],
+        bar: BarArea,
+        output: &mut String,
+    ) -> Result<()> {
         let set_start = FIRST_PICTURE_ID
             + if self.second_set {
                 PICTURE_ID_SET_SIZE
             } else {
                 0
             };
-        // Layered pictures are sent before the cursor moves.
-        let mut sending = String::new();
+        // Built in full first, so an error leaves the painter as it was.
         let mut codes = String::new();
-        if self.way == DrawingWay::InCells {
-            codes.push_str(HOLD_SCREEN);
-        }
+        codes.push_str(HOLD_SCREEN);
         codes.push_str(SAVE_CURSOR);
-        if self.way == DrawingWay::InCells {
-            push_erase_bar(&mut codes, bar.first_row, bar.last_row);
-        }
+        push_erase_bar(&mut codes, bar.first_row, bar.last_row);
         let mut new_ids = Vec::with_capacity(pictures.len());
         for (index, picture) in (0u32..).zip(pictures) {
             let id = set_start + index;
             let (column, placement) = bar.place(picture.pixels, picture.x)?;
-            codes.push_str(&format!(
-                "{CSI}{};{}{CURSOR_POSITION}",
-                bar.first_row,
-                column + 1
-            ));
-            match self.way {
-                DrawingWay::Layered => {
-                    sending.push_str(&send_codes(id, picture.pixels)?);
-                    codes.push_str(&place_code(id, placement));
-                }
-                DrawingWay::InCells => {
-                    codes.push_str(&show_codes(id, picture.pixels, placement)?);
-                }
-            }
+            push_move_to(&mut codes, bar, column);
+            codes.push_str(&show_codes(id, picture.pixels, placement)?);
             new_ids.push(id);
         }
-        // Built in full first, so an error above leaves the painter as it was.
-        output.push_str(&sending);
         output.push_str(&codes);
         self.push_remove_old(output);
         output.push_str(RESTORE_CURSOR);
-        if self.way == DrawingWay::InCells {
-            output.push_str(RELEASE_SCREEN);
-        }
+        output.push_str(RELEASE_SCREEN);
 
         self.drawn_ids = new_ids;
         self.second_set = !self.second_set;
-        self.area = area;
-        self.drawn = wanted;
-        self.wiped = false;
         Ok(())
     }
 
+    /// Takes the pictures drawn last off the screen. Layered pictures stay kept by the
+    /// terminal, so they can be placed again without sending them.
     fn push_remove_old(&mut self, output: &mut String) {
-        for id in self.drawn_ids.drain(..) {
-            output.push_str(&remove_code(id));
+        for (index, id) in self.drawn_ids.drain(..).enumerate() {
+            let code = match self.way {
+                DrawingWay::Layered => remove_placement_code(id, placement_id(index)),
+                DrawingWay::InCells => remove_code(id),
+            };
+            output.push_str(&code);
         }
     }
+}
+
+/// The placement number for the picture at `index` in the list. Placement numbers start
+/// at 1, because 0 means none.
+fn placement_id(index: usize) -> u32 {
+    // There are at most `MAX_PICTURES` pictures, so this always fits.
+    u32::try_from(index + 1).unwrap_or(u32::MAX)
+}
+
+/// Adds the code that moves the cursor to `column` in the bar's top row.
+fn push_move_to(codes: &mut String, bar: BarArea, column: u16) {
+    codes.push_str(&format!(
+        "{CSI}{};{}{CURSOR_POSITION}",
+        bar.first_row,
+        column + 1
+    ));
 }
 
 #[cfg(test)]
@@ -316,13 +392,14 @@ mod tests {
         Ok(output)
     }
 
-    /// The codes that show `picture` as number `id` in `AREA`.
-    /// The codes that move to a picture's place & place it, after it was sent.
+    /// The codes that move to the first picture's place & place picture number `id` there,
+    /// after it was sent.
     fn placed(id: u32, picture: BarPicture<'_>) -> Result<String> {
         let (column, placement) = AREA.place(picture.pixels, picture.x)?;
-        Ok(format!("{CSI}23;{}{CURSOR_POSITION}", column + 1) + &place_code(id, placement))
+        Ok(format!("{CSI}23;{}{CURSOR_POSITION}", column + 1) + &place_code(id, 1, placement))
     }
 
+    /// The codes that show `picture` as number `id` in `AREA`.
     fn shown(id: u32, picture: BarPicture<'_>) -> Result<String> {
         let (column, placement) = AREA.place(picture.pixels, picture.x)?;
         Ok(format!("{CSI}23;{}{CURSOR_POSITION}", column + 1)
@@ -419,16 +496,17 @@ mod tests {
     }
 
     #[test]
-    fn layered_drawing_sends_first_then_places_the_new_picture_and_removes_the_old_one()
-    -> Result<()> {
+    fn layered_drawing_sends_each_picture_once_and_then_only_places_it() -> Result<()> {
         let mut painter = Painter::new(DrawingWay::Layered);
+        let first_id = FIRST_PICTURE_ID;
+        let second_id = FIRST_PICTURE_ID + 1;
+        let pixels = picture(1, 0).pixels;
 
         let first = paint(&mut painter, &[picture(1, 0)], Some(AREA))?;
-        let second = paint(&mut painter, &[picture(1, 40)], Some(AREA))?;
+        let moved = paint(&mut painter, &[picture(1, 40)], Some(AREA))?;
+        let changed = paint(&mut painter, &[picture(2, 40)], Some(AREA))?;
+        let back = paint(&mut painter, &[picture(1, 40)], Some(AREA))?;
 
-        let first_id = FIRST_PICTURE_ID;
-        let second_id = FIRST_PICTURE_ID + PICTURE_ID_SET_SIZE;
-        let pixels = picture(1, 0).pixels;
         assert_eq!(
             first,
             format!(
@@ -437,13 +515,73 @@ mod tests {
                 placed(first_id, picture(1, 0))?
             )
         );
+        // The same picture in a new place is only placed again, which moves it.
         assert_eq!(
-            second,
+            moved,
+            format!(
+                "{SAVE_CURSOR}{}{RESTORE_CURSOR}",
+                placed(first_id, picture(1, 40))?
+            )
+        );
+        // A new picture is sent once, placed, & the old one is taken off.
+        assert_eq!(
+            changed,
             format!(
                 "{}{SAVE_CURSOR}{}{}{RESTORE_CURSOR}",
                 send_codes(second_id, pixels)?,
-                placed(second_id, picture(1, 40))?,
-                remove_code(first_id)
+                placed(second_id, picture(2, 40))?,
+                remove_placement_code(first_id, 1)
+            )
+        );
+        // A picture the terminal already has is not sent again.
+        assert_eq!(
+            back,
+            format!(
+                "{SAVE_CURSOR}{}{}{RESTORE_CURSOR}",
+                placed(first_id, picture(1, 40))?,
+                remove_placement_code(second_id, 1)
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_wipe_frees_the_kept_pictures_and_sends_them_again() -> Result<()> {
+        let mut painter = Painter::new(DrawingWay::Layered);
+        paint(&mut painter, &[picture(1, 0)], Some(AREA))?;
+        paint(&mut painter, &[picture(2, 0)], Some(AREA))?;
+
+        painter.bar_wiped();
+        let output = paint(&mut painter, &[picture(2, 0)], Some(AREA))?;
+
+        let freed = remove_code(FIRST_PICTURE_ID).len() + remove_code(FIRST_PICTURE_ID + 1).len();
+        assert!(output.contains(&remove_code(FIRST_PICTURE_ID)));
+        assert!(output.contains(&remove_code(FIRST_PICTURE_ID + 1)));
+        assert_eq!(
+            output[freed..],
+            format!(
+                "{}{SAVE_CURSOR}{}{RESTORE_CURSOR}",
+                send_codes(FIRST_PICTURE_ID, picture(2, 0).pixels)?,
+                placed(FIRST_PICTURE_ID, picture(2, 0))?
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn turning_the_bar_off_keeps_layered_pictures_for_later() -> Result<()> {
+        let mut painter = Painter::new(DrawingWay::Layered);
+        paint(&mut painter, &[picture(1, 0)], Some(AREA))?;
+
+        let off = paint(&mut painter, &[picture(1, 0)], None)?;
+        let on = paint(&mut painter, &[picture(1, 0)], Some(AREA))?;
+
+        assert_eq!(off, remove_placement_code(FIRST_PICTURE_ID, 1));
+        assert_eq!(
+            on,
+            format!(
+                "{SAVE_CURSOR}{}{RESTORE_CURSOR}",
+                placed(FIRST_PICTURE_ID, picture(1, 0))?
             )
         );
         Ok(())
@@ -495,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn turning_the_bar_off_only_removes_the_pictures() -> Result<()> {
+    fn turning_the_bar_off_only_removes_the_pictures_in_the_cells() -> Result<()> {
         let mut painter = Painter::new(DrawingWay::InCells);
         paint(&mut painter, &[picture(1, 0)], Some(AREA))?;
 
