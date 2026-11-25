@@ -40,7 +40,10 @@ const PLAY_ANIMATION: &str = "play";
 /// The animation the cat runs with. Until it is drawn, the cat walks.
 const RUN_ANIMATION: &str = "run";
 
-/// How long a meal lasts on the cat's clock, in seconds.
+/// The cat's home spot, where it eats & sleeps: the left end of the bar.
+const HOME_X: u32 = 0;
+
+/// How long a meal lasts on the cat's clock, in seconds, from when it gets home.
 const MEAL_SECONDS: u64 = 5 * 60;
 
 /// How long the cat sits or plays before it picks again, in seconds.
@@ -81,10 +84,19 @@ struct Meal {
 enum Mode {
     /// Free time: it picks resting actions, one after another.
     Free(Rest),
+    /// It walks to its home spot, to do `then` there.
+    GoingHome { walk: Walk, then: AtHome },
     /// It eats until `until` on its clock.
     Eating { player: Player, until: u64 },
     /// It sleeps until the nap or the night ends.
     Sleeping(Player),
+}
+
+/// What the cat goes home to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AtHome {
+    Eat,
+    Sleep,
 }
 
 /// The resting action the cat is doing in free time.
@@ -160,8 +172,9 @@ impl Cat {
         let now = time.since_start;
         self.pick_mode(time);
         self.pick_rest(now, right_end);
+        self.arrive_home(time);
         let (animation, frame) = match self.mode {
-            Mode::Free(Rest::Moving(walk)) => {
+            Mode::Free(Rest::Moving(walk)) | Mode::GoingHome { walk, .. } => {
                 let walking = walk.at(now);
                 self.x = walking.x;
                 self.facing = walking.facing;
@@ -189,7 +202,9 @@ impl Cat {
     /// is soon, because every animation the cat plays loops.
     pub fn until_next_change(&self, since_start: Duration) -> Option<Duration> {
         match self.mode {
-            Mode::Free(Rest::Moving(walk)) => walk.until_next_frame(since_start),
+            Mode::Free(Rest::Moving(walk)) | Mode::GoingHome { walk, .. } => {
+                walk.until_next_frame(since_start)
+            }
             Mode::Free(Rest::Staying { player, until }) => {
                 let done_in = until.saturating_sub(since_start);
                 let next_frame = player.until_next_frame(since_start);
@@ -205,10 +220,15 @@ impl Cat {
     fn pick_mode(&mut self, time: Time) {
         let now = time.since_start;
         match (self.schedule.part_at(time.second_of_day()), self.mode) {
-            (PartOfDay::Nap | PartOfDay::Night, Mode::Sleeping(_)) => {}
-            (PartOfDay::Nap | PartOfDay::Night, _) => {
-                self.mode = Mode::Sleeping(Player::start(self.animations.sleep, now));
-            }
+            (
+                PartOfDay::Nap | PartOfDay::Night,
+                Mode::Sleeping(_)
+                | Mode::GoingHome {
+                    then: AtHome::Sleep,
+                    ..
+                },
+            ) => {}
+            (PartOfDay::Nap | PartOfDay::Night, _) => self.go_home(AtHome::Sleep, time),
             (part @ (PartOfDay::Breakfast | PartOfDay::Dinner), mode) => {
                 let meal = Meal {
                     part,
@@ -217,10 +237,7 @@ impl Cat {
                 if self.last_meal != Some(meal) {
                     // The meal starts now, also when Meowsh opens partway through meal time.
                     self.last_meal = Some(meal);
-                    self.mode = Mode::Eating {
-                        player: Player::start(self.animations.eat, now),
-                        until: time.clock + MEAL_SECONDS,
-                    };
+                    self.go_home(AtHome::Eat, time);
                 } else if let Mode::Eating { until, .. } = mode
                     && time.clock >= until
                 {
@@ -230,6 +247,39 @@ impl Cat {
             (PartOfDay::Free, Mode::Free(_)) => {}
             (PartOfDay::Free, _) => self.mode = free_time(self.animations, now),
         }
+    }
+
+    /// Walks home to do `then` there, or starts it at once if the cat is already home.
+    fn go_home(&mut self, then: AtHome, time: Time) {
+        if self.x == HOME_X {
+            self.start_at_home(then, time);
+        } else {
+            let walk = Walk::start(self.animations.walk, self.x, HOME_X, time.since_start);
+            self.mode = Mode::GoingHome { walk, then };
+        }
+    }
+
+    /// Starts what the cat went home for, once its walk home is done.
+    fn arrive_home(&mut self, time: Time) {
+        if let Mode::GoingHome { walk, then } = self.mode
+            && walk.at(time.since_start).arrived
+        {
+            self.x = HOME_X;
+            self.start_at_home(then, time);
+        }
+    }
+
+    /// Eats or sleeps at home, facing out into the bar.
+    fn start_at_home(&mut self, then: AtHome, time: Time) {
+        let now = time.since_start;
+        self.facing = Facing::Right;
+        self.mode = match then {
+            AtHome::Eat => Mode::Eating {
+                player: Player::start(self.animations.eat, now),
+                until: time.clock + MEAL_SECONDS,
+            },
+            AtHome::Sleep => Mode::Sleeping(Player::start(self.animations.sleep, now)),
+        };
     }
 
     /// In free time, picks the next resting action once the one before is done.
@@ -368,21 +418,69 @@ mod tests {
         Ok(())
     }
 
+    /// Plays free time at `clock` a frame at a time until the cat is away from home, &
+    /// says when that was.
+    fn leave_home(cat: &mut Cat, clock: u64) -> Result<Duration> {
+        for tenth in 0..6000 {
+            let since_start = Duration::from_millis(tenth * 100);
+            if update(cat, Time { since_start, clock }, BAR_WIDTH)?.x > HOME_X {
+                return Ok(since_start);
+            }
+        }
+        anyhow::bail!("the cat never left home")
+    }
+
+    /// Plays on a frame at a time from `since_start`, with the clock running 60 times
+    /// faster from `clock`, until the cat is not walking home anymore. Returns the picture
+    /// then & the time it was.
+    fn walk_home(cat: &mut Cat, since_start: Duration, clock: u64) -> Result<(ScenePicture, Time)> {
+        for tenth in 1..6000 {
+            let time = Time {
+                since_start: since_start + Duration::from_millis(tenth * 100),
+                clock: clock + tenth * 6,
+            };
+            let picture = update(cat, time, BAR_WIDTH)?;
+            if !matches!(cat.mode, Mode::GoingHome { .. }) {
+                return Ok((picture, time));
+            }
+            assert_eq!(picture.facing, Facing::Left, "it faces home on the way");
+        }
+        anyhow::bail!("the cat never got home")
+    }
+
     #[test]
-    fn the_cat_sleeps_through_the_nap_where_it_is_then_is_free_again() -> Result<()> {
+    fn at_nap_time_the_cat_walks_home_and_sleeps_there_then_is_free_again() -> Result<()> {
         let mut cat = cat()?;
-        let before_nap = NAP_START - 10;
-        update(&mut cat, time(before_nap, 0), BAR_WIDTH)?;
-        let was_at = update(&mut cat, time(before_nap, 9), BAR_WIDTH)?.x;
+        let left = leave_home(&mut cat, MORNING)?;
 
-        let asleep = update(&mut cat, time(before_nap, 10), BAR_WIDTH)?;
-        update(&mut cat, time(before_nap, 600), BAR_WIDTH)?;
+        let (home, arrived) = walk_home(&mut cat, left, NAP_START)?;
+        let later = |seconds: u64| Time {
+            since_start: arrived.since_start + Duration::from_secs(seconds),
+            clock: arrived.clock + seconds,
+        };
+        update(&mut cat, later(600), BAR_WIDTH)?;
         let still_asleep = matches!(cat.mode, Mode::Sleeping(_));
-        update(&mut cat, time(before_nap, 2 * 60 * 60 + 10), BAR_WIDTH)?;
+        update(&mut cat, later(2 * 60 * 60), BAR_WIDTH)?;
 
-        assert_eq!((asleep.animation, asleep.x), (SLEEP_ANIMATION, was_at));
+        let at_home = (SLEEP_ANIMATION, HOME_X, Facing::Right);
+        assert_eq!((home.animation, home.x, home.facing), at_home);
         assert!(still_asleep);
         assert!(matches!(cat.mode, Mode::Free(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn a_meal_lasts_its_time_from_when_the_cat_gets_home() -> Result<()> {
+        let mut cat = cat()?;
+        let left = leave_home(&mut cat, MORNING)?;
+
+        let (home, arrived) = walk_home(&mut cat, left, BREAKFAST)?;
+
+        assert_eq!((home.x, home.facing), (HOME_X, Facing::Right));
+        let Mode::Eating { until, .. } = cat.mode else {
+            anyhow::bail!("the cat should eat once home, not {:?}", cat.mode);
+        };
+        assert_eq!(until, arrived.clock + MEAL_SECONDS);
         Ok(())
     }
 
