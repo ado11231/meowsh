@@ -40,6 +40,11 @@ impl Walk {
         }
     }
 
+    /// The animation being played.
+    pub fn animation(&self) -> &'static Animation {
+        self.player.animation()
+    }
+
     /// The spot the cat is walking to.
     pub fn destination(&self) -> u32 {
         self.to

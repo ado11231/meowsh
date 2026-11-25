@@ -1,21 +1,29 @@
 //! The cat part: the brain that picks what the cat does. It never touches the terminal,
 //! files, or the real clock.
 //!
+//! * `action`: picks a resting action for free time.
 //! * `day`: turns the time of day into meal, nap, night, or free time.
 //! * `motion`: where the cat is in the bar & walking it from one spot to another.
 //! * `player`: plays one animation by its timing.
 
+pub mod action;
 pub mod day;
 pub mod motion;
 pub mod player;
 
 use crate::anim::{self, Animation, CANVAS};
 use crate::scene::{Facing, Scene, ScenePicture};
+use action::Action;
 use anyhow::{Context, Result};
 use day::{PartOfDay, SECONDS_PER_DAY, Schedule};
+use fastrand::Rng;
 use motion::Walk;
 use player::Player;
+use std::ops::RangeInclusive;
 use std::time::Duration;
+
+/// The animation the cat sits & waits with.
+const SIT_ANIMATION: &str = "sit";
 
 /// The animation the cat walks with.
 const WALK_ANIMATION: &str = "walk";
@@ -23,16 +31,25 @@ const WALK_ANIMATION: &str = "walk";
 /// The animation the cat sleeps with.
 const SLEEP_ANIMATION: &str = "sleep";
 
-/// The animation the cat eats with. It sits until `eat` is drawn.
-const EAT_ANIMATION: &str = "sit";
+/// The animation the cat eats with. Until it is drawn, the cat sits.
+const EAT_ANIMATION: &str = "eat";
+
+/// The animation the cat plays with. Until it is drawn, the cat sits.
+const PLAY_ANIMATION: &str = "play";
+
+/// The animation the cat runs with. Until it is drawn, the cat walks.
+const RUN_ANIMATION: &str = "run";
 
 /// How long a meal lasts on the cat's clock, in seconds.
 const MEAL_SECONDS: u64 = 5 * 60;
 
+/// How long the cat sits or plays before it picks again, in seconds.
+const STAY_SECONDS: RangeInclusive<u64> = 10..=40;
+
 /// The time, as the cat is told it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Time {
-    /// How long Meowsh has run. Animations play by it.
+    /// How long Meowsh has run. Animations & resting actions go by it.
     pub since_start: Duration,
     /// Seconds on the cat's clock since midnight of the day Meowsh started. Past
     /// `SECONDS_PER_DAY` it is a later day. The cat's day goes by it.
@@ -62,51 +79,76 @@ struct Meal {
 /// What the cat is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
-    /// Free time: it walks the bar.
-    Free(Walk),
+    /// Free time: it picks resting actions, one after another.
+    Free(Rest),
     /// It eats until `until` on its clock.
     Eating { player: Player, until: u64 },
     /// It sleeps until the nap or the night ends.
     Sleeping(Player),
 }
 
-/// The animations the cat needs.
+/// The resting action the cat is doing in free time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rest {
+    /// It walks or runs to a spot, then picks again.
+    Moving(Walk),
+    /// It sits or plays where it is until `until`, then picks again.
+    Staying { player: Player, until: Duration },
+}
+
+/// The animations the cat plays, with the ones not drawn yet filled in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Animations {
+    sit: &'static Animation,
     walk: &'static Animation,
     sleep: &'static Animation,
     eat: &'static Animation,
+    play: &'static Animation,
+    run: &'static Animation,
+}
+
+impl Animations {
+    fn find() -> Result<Self> {
+        let sit = find_animation(SIT_ANIMATION)?;
+        let walk = find_animation(WALK_ANIMATION)?;
+        Ok(Self {
+            sit,
+            walk,
+            sleep: find_animation(SLEEP_ANIMATION)?,
+            eat: anim::find(EAT_ANIMATION).unwrap_or(sit),
+            play: anim::find(PLAY_ANIMATION).unwrap_or(sit),
+            run: anim::find(RUN_ANIMATION).unwrap_or(walk),
+        })
+    }
 }
 
 /// The cat. It is handed the time & the bar's size, & says what should be in the bar.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Cat {
     animations: Animations,
     schedule: Schedule,
     mode: Mode,
-    /// Where the cat is, kept up to date while it walks.
+    /// Where the cat is, kept up to date while it moves.
     x: u32,
     facing: Facing,
     /// The last meal it started, so it does not eat the same one twice.
     last_meal: Option<Meal>,
+    /// Makes the cat's choices. The same seed makes the same choices.
+    rng: Rng,
 }
 
 impl Cat {
-    /// A cat at the left end of the bar, as Meowsh starts.
-    pub fn new(schedule: Schedule) -> Result<Self> {
-        let animations = Animations {
-            walk: find_animation(WALK_ANIMATION)?,
-            sleep: find_animation(SLEEP_ANIMATION)?,
-            eat: find_animation(EAT_ANIMATION)?,
-        };
+    /// A cat at the left end of the bar, as Meowsh starts. `seed` decides its choices.
+    pub fn new(schedule: Schedule, seed: u64) -> Result<Self> {
+        let animations = Animations::find()?;
         Ok(Self {
             animations,
             schedule,
-            // Already there, so the first update picks where to walk.
-            mode: Mode::Free(Walk::start(animations.walk, 0, 0, Duration::ZERO)),
+            mode: free_time(animations, Duration::ZERO),
             x: 0,
             facing: Facing::Right,
             last_meal: None,
+            rng: Rng::with_seed(seed),
         })
     }
 
@@ -117,26 +159,17 @@ impl Cat {
         let right_end = bar_width.saturating_sub(CANVAS.width);
         let now = time.since_start;
         self.pick_mode(time);
-        let (animation, frame) = match &mut self.mode {
-            Mode::Free(walk) => {
-                let walking = walk.at(now);
-                // After a resize, the spot it was walking to may be past the new end.
-                if walking.arrived || walk.destination() > right_end {
-                    let from = walking.x.min(right_end);
-                    // It walks to whichever end is further away, so it paces the whole bar.
-                    let to = if from < right_end - from {
-                        right_end
-                    } else {
-                        0
-                    };
-                    *walk = Walk::start(self.animations.walk, from, to, now);
-                }
+        self.pick_rest(now, right_end);
+        let (animation, frame) = match self.mode {
+            Mode::Free(Rest::Moving(walk)) => {
                 let walking = walk.at(now);
                 self.x = walking.x;
                 self.facing = walking.facing;
-                (self.animations.walk, walking.frame)
+                (walk.animation(), walking.frame)
             }
-            Mode::Eating { player, .. } | Mode::Sleeping(player) => {
+            Mode::Free(Rest::Staying { player, .. })
+            | Mode::Eating { player, .. }
+            | Mode::Sleeping(player) => {
                 self.x = self.x.min(right_end);
                 (player.animation(), player.at(now).frame)
             }
@@ -155,8 +188,13 @@ impl Cat {
     /// until something happens. A new part of the day is noticed at the next frame, which
     /// is soon, because every animation the cat plays loops.
     pub fn until_next_change(&self, since_start: Duration) -> Option<Duration> {
-        match &self.mode {
-            Mode::Free(walk) => walk.until_next_frame(since_start),
+        match self.mode {
+            Mode::Free(Rest::Moving(walk)) => walk.until_next_frame(since_start),
+            Mode::Free(Rest::Staying { player, until }) => {
+                let done_in = until.saturating_sub(since_start);
+                let next_frame = player.until_next_frame(since_start);
+                Some(next_frame.map_or(done_in, |next_frame| next_frame.min(done_in)))
+            }
             Mode::Eating { player, .. } | Mode::Sleeping(player) => {
                 player.until_next_frame(since_start)
             }
@@ -186,19 +224,69 @@ impl Cat {
                 } else if let Mode::Eating { until, .. } = mode
                     && time.clock >= until
                 {
-                    self.mode = self.free(now);
+                    self.mode = free_time(self.animations, now);
                 }
             }
             (PartOfDay::Free, Mode::Free(_)) => {}
-            (PartOfDay::Free, _) => self.mode = self.free(now),
+            (PartOfDay::Free, _) => self.mode = free_time(self.animations, now),
         }
     }
 
-    /// Free time, starting where the cat is.
-    fn free(&self, now: Duration) -> Mode {
-        // Already there, so the next update picks where to walk.
-        Mode::Free(Walk::start(self.animations.walk, self.x, self.x, now))
+    /// In free time, picks the next resting action once the one before is done.
+    fn pick_rest(&mut self, now: Duration, right_end: u32) {
+        let Mode::Free(rest) = self.mode else {
+            return;
+        };
+        let done = match rest {
+            Rest::Moving(walk) => {
+                let walking = walk.at(now);
+                self.x = walking.x;
+                // After a resize, the spot it was moving to may be past the new end.
+                walking.arrived || walk.destination() > right_end
+            }
+            Rest::Staying { until, .. } => now >= until,
+        };
+        if !done {
+            return;
+        }
+        let from = self.x.min(right_end);
+        let rest = match action::pick(&mut self.rng) {
+            Action::Sit => self.stay(self.animations.sit, now),
+            Action::Play => self.stay(self.animations.play, now),
+            Action::Walk => {
+                let to = self.rng.u32(0..=right_end);
+                Rest::Moving(Walk::start(self.animations.walk, from, to, now))
+            }
+            Action::Run => {
+                // A dash to whichever end is further away.
+                let to = if from < right_end - from {
+                    right_end
+                } else {
+                    0
+                };
+                Rest::Moving(Walk::start(self.animations.run, from, to, now))
+            }
+        };
+        self.mode = Mode::Free(rest);
     }
+
+    /// Sitting or playing where the cat is, for a while.
+    fn stay(&mut self, animation: &'static Animation, now: Duration) -> Rest {
+        let seconds = self.rng.u64(STAY_SECONDS);
+        Rest::Staying {
+            player: Player::start(animation, now),
+            until: now + Duration::from_secs(seconds),
+        }
+    }
+}
+
+/// The start of free time, at `now`.
+fn free_time(animations: Animations, now: Duration) -> Mode {
+    // Already done, so the next update picks a resting action.
+    Mode::Free(Rest::Staying {
+        player: Player::start(animations.sit, now),
+        until: now,
+    })
 }
 
 /// Finds an animation the cat needs, by its folder name.
@@ -241,30 +329,36 @@ mod tests {
             .context("the cat should be in the bar")
     }
 
+    /// The seed for the cats in these tests, so they make the same choices every run.
+    const SEED: u64 = 7;
+
+    fn cat() -> Result<Cat> {
+        Cat::new(Schedule::default(), SEED)
+    }
+
     #[test]
-    fn in_free_time_the_cat_walks_to_the_far_end_and_turns_around() -> Result<()> {
-        let mut cat = Cat::new(Schedule::default())?;
-        let step = cat.animations.walk.step;
-        let frame_ms = u64::from(cat.animations.walk.frame_ms);
-        let crossing_ms = u64::from(120 / step) * frame_ms;
-        let at = |milliseconds: u64| Time {
-            since_start: Duration::from_millis(milliseconds),
-            clock: MORNING,
-        };
-
-        let start = update(&mut cat, at(0), BAR_WIDTH)?;
-        let across = update(&mut cat, at(crossing_ms), BAR_WIDTH)?;
-        let back = update(&mut cat, at(crossing_ms + frame_ms), BAR_WIDTH)?;
-
-        assert_eq!((start.x, start.facing), (0, Facing::Right));
-        assert_eq!((across.x, across.facing), (120, Facing::Left));
-        assert_eq!(back.x, 120 - step);
+    fn in_free_time_the_cat_sits_and_moves_and_stays_in_the_bar() -> Result<()> {
+        let mut cat = cat()?;
+        let mut sat = false;
+        let mut moved = false;
+        // Ten minutes, a frame at a time.
+        for tenth in 0..6000 {
+            let time = Time {
+                since_start: Duration::from_millis(tenth * 100),
+                clock: MORNING,
+            };
+            let picture = update(&mut cat, time, BAR_WIDTH)?;
+            assert!(picture.x <= 120, "the cat is at {}, past 120", picture.x);
+            sat |= picture.animation == SIT_ANIMATION;
+            moved |= picture.animation == WALK_ANIMATION;
+        }
+        assert!(sat && moved, "sat: {sat}, moved: {moved}");
         Ok(())
     }
 
     #[test]
     fn a_bar_made_smaller_keeps_the_cat_inside_it() -> Result<()> {
-        let mut cat = Cat::new(Schedule::default())?;
+        let mut cat = cat()?;
         update(&mut cat, time(MORNING, 0), BAR_WIDTH)?;
 
         let picture = update(&mut cat, time(MORNING, 1), CANVAS.width + 30)?;
@@ -275,38 +369,36 @@ mod tests {
     }
 
     #[test]
-    fn the_cat_sleeps_through_the_nap_where_it_is_then_walks_again() -> Result<()> {
-        let mut cat = Cat::new(Schedule::default())?;
+    fn the_cat_sleeps_through_the_nap_where_it_is_then_is_free_again() -> Result<()> {
+        let mut cat = cat()?;
         let before_nap = NAP_START - 10;
         update(&mut cat, time(before_nap, 0), BAR_WIDTH)?;
-        let walked_to = update(&mut cat, time(before_nap, 9), BAR_WIDTH)?.x;
+        let was_at = update(&mut cat, time(before_nap, 9), BAR_WIDTH)?.x;
 
         let asleep = update(&mut cat, time(before_nap, 10), BAR_WIDTH)?;
-        let still_asleep = update(&mut cat, time(before_nap, 600), BAR_WIDTH)?;
-        let after_nap = update(&mut cat, time(before_nap, 2 * 60 * 60 + 10), BAR_WIDTH)?;
+        update(&mut cat, time(before_nap, 600), BAR_WIDTH)?;
+        let still_asleep = matches!(cat.mode, Mode::Sleeping(_));
+        update(&mut cat, time(before_nap, 2 * 60 * 60 + 10), BAR_WIDTH)?;
 
-        assert_eq!((asleep.animation, asleep.x), (SLEEP_ANIMATION, walked_to));
-        assert_eq!(still_asleep.animation, SLEEP_ANIMATION);
-        assert_eq!(after_nap.animation, WALK_ANIMATION);
+        assert_eq!((asleep.animation, asleep.x), (SLEEP_ANIMATION, was_at));
+        assert!(still_asleep);
+        assert!(matches!(cat.mode, Mode::Free(_)));
         Ok(())
     }
 
     #[test]
     fn each_meal_is_eaten_once_for_its_time_even_if_meowsh_opens_partway_through() -> Result<()> {
-        let mut cat = Cat::new(Schedule::default())?;
-        let at = |seconds: u64| time(BREAKFAST, seconds);
+        let mut cat = cat()?;
+        let mut eating_at = |seconds: u64| -> Result<bool> {
+            update(&mut cat, time(BREAKFAST, seconds), BAR_WIDTH)?;
+            Ok(matches!(cat.mode, Mode::Eating { .. }))
+        };
 
-        let eating = update(&mut cat, at(0), BAR_WIDTH)?;
-        let near_the_end = update(&mut cat, at(MEAL_SECONDS - 1), BAR_WIDTH)?;
-        let done = update(&mut cat, at(MEAL_SECONDS), BAR_WIDTH)?;
-        let later = update(&mut cat, at(MEAL_SECONDS + 600), BAR_WIDTH)?;
-        let tomorrow = update(&mut cat, at(SECONDS_PER_DAY), BAR_WIDTH)?;
-
-        assert_eq!(eating.animation, EAT_ANIMATION);
-        assert_eq!(near_the_end.animation, EAT_ANIMATION);
-        assert_eq!(done.animation, WALK_ANIMATION);
-        assert_eq!(later.animation, WALK_ANIMATION);
-        assert_eq!(tomorrow.animation, EAT_ANIMATION);
+        assert!(eating_at(0)?);
+        assert!(eating_at(MEAL_SECONDS - 1)?);
+        assert!(!eating_at(MEAL_SECONDS)?);
+        assert!(!eating_at(MEAL_SECONDS + 600)?);
+        assert!(eating_at(SECONDS_PER_DAY)?);
         Ok(())
     }
 }

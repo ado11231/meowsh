@@ -98,7 +98,8 @@ fn run(
             // The show's time starts with the session, at zero.
             Some(animation) => Show::Preview(Player::start(animation, Duration::ZERO)),
             None => Show::Cat {
-                cat: Cat::new(Schedule::default())?,
+                // A new seed each run, so each cat makes its own choices.
+                cat: Cat::new(Schedule::default(), fastrand::u64(..))?,
                 clock: Clock::from_env()?,
             },
         };
