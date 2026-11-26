@@ -147,7 +147,7 @@ flowchart LR
 ## Art Track
 
 * Set up Blender. See [ANIMATION.md](ANIMATION.md#blender-setup).
-* Design the cat & its bones, in white, on the 309 by 215 canvas: round & simple with big dot eyes, like [the reference sheet](assets/cat-reference.png).
+* Design the cat & its bones, in white, on the 309 by 215 canvas: round & simple with big dot eyes.
 * Draw `sit` & `walk` first. They are enough to start Phase 4.
 * Then `sleep`, `wake`, `eat` & the bowl.
 * Then play, run, turn & the reactions.

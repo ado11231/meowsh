@@ -1,7 +1,7 @@
 # Animations
 
 * Every animation planned for the cat, & what each one is for.
-* Frame counts come from the [reference sheet](assets/cat-reference.png).
+* The finished frames are in [FRAMES.md](FRAMES.md).
 * How to draw them in Blender: [ANIMATION.md](ANIMATION.md).
 
 ## Contents
@@ -10,7 +10,7 @@
 * [Play](#play)
 * [Reactions](#reactions)
 * [Props](#props)
-* [On The Sheet, Not Planned Yet](#on-the-sheet-not-planned-yet)
+* [Ideas, Not Planned Yet](#ideas-not-planned-yet)
 * [Draw First](#draw-first)
 
 ## Resting & Moving
@@ -50,7 +50,7 @@
 | `bowl` | Meals & treats, at the cat's home spot. |
 | `ball` | Play. It rolls & stays where it stops. |
 
-## On The Sheet, Not Planned Yet
+## Ideas, Not Planned Yet
 
 | Animation | Frames | What It Is | Idea |
 | --- | --- | --- | --- |

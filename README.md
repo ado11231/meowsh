@@ -1,38 +1,36 @@
-# Meowsh
+<h1 align="center">meowsh</h1>
 
-* A small cat that lives at the bottom of your terminal.
-* Works with bash & zsh, in kitty & the VS Code terminal.
-* Early work. The cat sits & blinks for now.
+<p align="center">A small cat that lives at the bottom of your terminal.</p>
+
+<p align="center">
+  <a href="https://crates.io/crates/meowsh"><img src="https://img.shields.io/crates/v/meowsh.svg" alt="crates.io"></a>
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ado11231/meowsh/main/docs/media/meowsh.gif" width="753" alt="A terminal with a white cat asleep in the bottom left corner">
+</p>
+
+## Requirements
+
+* kitty or VS Code.
+* bash or zsh.
+* macOS.
+* Rust 1.89 or newer.
 
 ## Install
 
-* Needs Rust 1.89 or newer.
-
 ```sh
-cargo install --path .
+cargo install meowsh
 meowsh install
 ```
 
-* Open a new terminal & the cat shows up.
-
-## Commands
-
-* `meowsh install`: adds the startup line to your shell settings.
-* `meowsh uninstall`: removes it.
-* `meowsh preview <name>`: plays one animation, such as `sit`.
-
-## Build & test
+## Remove
 
 ```sh
-cargo build
-cargo test
-cargo clippy
+meowsh uninstall
+cargo uninstall meowsh
 ```
 
-## Docs
+## License
 
-* [Design](docs/DESIGN.md)
-* [Architecture](docs/ARCHITECTURE.md)
-* [Animation](docs/ANIMATION.md)
-* [Roadmap](docs/ROADMAP.md)
-* [Contributing](CONTRIBUTING.md)
+* Dual licensed under [MIT](LICENSE-MIT) & [Apache 2.0](LICENSE-APACHE).

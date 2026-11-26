@@ -5,6 +5,10 @@ edition = "2024"
 rust-version = "1.89"
 description = "A small cat that lives in your terminal."
 readme = "README.md"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ado11231/meowsh"
+# The build only needs the finished frames, not the Blender files or the docs.
+exclude = [".github/", "assets/art/", "docs/", "*.blend", "*.blend1"]
 keywords = ["terminal", "cat", "pty", "shell"]
 categories = ["command-line-utilities"]
 

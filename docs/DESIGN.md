@@ -134,7 +134,7 @@ flowchart TD
 
 ## The Cat's Look
 
-* A round, simple white cat with big dot eyes, like the [reference sheet](assets/cat-reference.png), redrawn fresh in Blender. See [ANIMATION.md](ANIMATION.md) for how it is made.
+* A round, simple white cat with big dot eyes, drawn in Blender. See [ANIMATION.md](ANIMATION.md) for how it is made.
 * These rules hold whatever it looks like:
 
 * It is one image per frame, with a see through background.

@@ -21,7 +21,7 @@
 * The cat is drawn & posed in Blender (5.2) with Grease Pencil. It is not made by code.
 * Blender saves each animation as numbered PNG pictures.
 * Meowsh builds those pictures into the program. The terminal only ever sees PNGs.
-* The look, poses & frame counts follow the [reference sheet](assets/cat-reference.png).
+* Frame counts are in [ANIMATIONS.md](ANIMATIONS.md). The finished frames are in [FRAMES.md](FRAMES.md).
 
 * **The Blender file is the source.** It is committed next to the pictures, so anyone can open it & fix a frame.
 * **Every picture follows the same rules.** Same size, same floor, so Meowsh can draw any frame anywhere without lining it up.
