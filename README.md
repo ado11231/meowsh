@@ -1,9 +1,8 @@
 <h1 align="center">meowsh</h1>
 
-<p align="center">A small cat that lives at the bottom of your terminal.</p>
-
 <p align="center">
   <a href="https://crates.io/crates/meowsh"><img src="https://img.shields.io/crates/v/meowsh.svg" alt="crates.io"></a>
+  <img src="https://img.shields.io/crates/msrv/meowsh.svg" alt="Rust version">
 </p>
 
 <p align="center">
