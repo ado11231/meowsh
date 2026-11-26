@@ -2,7 +2,7 @@
 
 * The order Meowsh gets built in.
 * A phase is complete only when its **Done when** line is true in kitty & in the VS Code terminal, on macOS.
-* Last updated November 24, 2026.
+* Last updated November 25, 2026.
 
 ## Contents
 
@@ -21,7 +21,7 @@
 | 1 | A wrapper you cannot notice | Done |
 | 2 | The bar, with one still picture in it | Done |
 | 3 | Animations from folders & a preview command | Done |
-| 4 | The cat's day & resting actions | In progress |
+| 4 | The cat's day & resting actions | Done |
 | 5 | Reactions | Planned |
 | 6 | Commands: treat, pet, quiet, come, name | Planned |
 | 7 | A public release | Planned |
@@ -118,6 +118,8 @@ flowchart LR
 * Going home for meals & sleep.
 
 * **Done when:** a whole day plays out with `MEOWSH_CLOCK_SPEED=60`, using real art, & the cat walks across the bar smoothly.
+* Done with `sit`, `walk` & `sleep`. The watching mode moves to Phase 5, with the reactions that use it.
+* The cat is still blurry in VS Code. Fixing that is left for later.
 
 ### Phase 5: Reactions
 
