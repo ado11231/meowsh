@@ -73,7 +73,7 @@ height = 215
 floor = 204
 ```
 
-* Meowsh scales this to fit the two row bar.
+* Meowsh scales this to fit the three row bar.
 
 ### Color
 

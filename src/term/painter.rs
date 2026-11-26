@@ -373,9 +373,9 @@ mod tests {
     /// A 2 by 1 picture: one white pixel & one see through pixel.
     const TWO_PIXELS: [u8; 8] = [255, 255, 255, 255, 0, 0, 0, 0];
 
-    /// A bar in rows 23 & 24 of an 80 column window, with 10 by 20 pixel cells.
+    /// The bar in a 24 row, 80 column window, with 10 by 20 pixel cells.
     const AREA: BarArea = BarArea {
-        first_row: 23,
+        first_row: 24 - BAR_ROWS + 1,
         last_row: 24,
         columns: 80,
         cell_width: 10,
@@ -408,14 +408,19 @@ mod tests {
     /// after it was sent.
     fn placed(id: u32, picture: BarPicture<'_>) -> Result<String> {
         let (column, placement) = AREA.place(picture.pixels, picture.x)?;
-        Ok(format!("{CSI}23;{}{CURSOR_POSITION}", column + 1) + &place_code(id, 1, placement))
+        Ok(
+            format!("{CSI}{};{}{CURSOR_POSITION}", AREA.first_row, column + 1)
+                + &place_code(id, 1, placement),
+        )
     }
 
     /// The codes that show `picture` as number `id` in `AREA`.
     fn shown(id: u32, picture: BarPicture<'_>) -> Result<String> {
         let (column, placement) = AREA.place(picture.pixels, picture.x)?;
-        Ok(format!("{CSI}23;{}{CURSOR_POSITION}", column + 1)
-            + &show_codes(id, picture.pixels, placement)?)
+        Ok(
+            format!("{CSI}{};{}{CURSOR_POSITION}", AREA.first_row, column + 1)
+                + &show_codes(id, picture.pixels, placement)?,
+        )
     }
 
     #[test]
@@ -482,18 +487,18 @@ mod tests {
             rgba: &rgba,
         };
 
-        // The bar is 40 pixels tall, so the picture is 57.5 pixels wide on screen, which
-        // rounds to 6 columns. 100 picture pixels in is 18.6 screen pixels: column 1, 8
+        // The bar is 60 pixels tall, so the picture is 86.2 pixels wide on screen, which
+        // rounds to 9 columns. 100 picture pixels in is 27.9 screen pixels: column 2, 7
         // pixels into the cell.
         let (column, placement) = AREA.place(pixels, 100)?;
 
-        assert_eq!(column, 1);
+        assert_eq!(column, 2);
         assert_eq!(
             placement,
             Placement {
-                columns: 6,
+                columns: 9,
                 rows: BAR_ROWS,
-                offset_x: 8
+                offset_x: 7
             }
         );
         Ok(())
@@ -501,9 +506,9 @@ mod tests {
 
     #[test]
     fn the_bar_width_is_given_in_the_pictures_own_pixels() {
-        // The bar is 800 by 40 screen pixels. A 215 pixel tall picture is scaled down to 40,
-        // so 800 screen pixels across are 4300 of its pixels.
-        assert_eq!(AREA.width_in_picture_pixels(215), 4300);
+        // The bar is 800 by 60 screen pixels. A 215 pixel tall picture is scaled down to 60,
+        // so 800 screen pixels across are 2866 of its pixels.
+        assert_eq!(AREA.width_in_picture_pixels(215), 2866);
     }
 
     #[test]

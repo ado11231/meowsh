@@ -13,7 +13,7 @@ use portable_pty::PtySize;
 use std::io::Write;
 
 /// How many rows the bar takes at the bottom of the window.
-pub const BAR_ROWS: u16 = 2;
+pub const BAR_ROWS: u16 = 3;
 
 /// The fewest rows the shell keeps while the bar is on. In a shorter window the bar turns
 /// off, so the shell is not squeezed.
@@ -218,8 +218,9 @@ mod tests {
         let expected = format!(
             "{SAVE_CURSOR}{CSI}{SCROLL_REGION}{RESTORE_CURSOR}\
              {feeds}{CSI}{BAR_ROWS}{CURSOR_UP}\
-             {SAVE_CURSOR}{CSI}1;22{SCROLL_REGION}\
-             {CSI}23;1{CURSOR_POSITION}{ERASE_LINE}{CSI}24;1{CURSOR_POSITION}{ERASE_LINE}\
+             {SAVE_CURSOR}{CSI}1;21{SCROLL_REGION}\
+             {CSI}22;1{CURSOR_POSITION}{ERASE_LINE}{CSI}23;1{CURSOR_POSITION}{ERASE_LINE}\
+             {CSI}24;1{CURSOR_POSITION}{ERASE_LINE}\
              {RESTORE_CURSOR}"
         );
 
@@ -237,7 +238,8 @@ mod tests {
     fn leaving_empties_the_bar_and_lets_the_whole_window_scroll() {
         let with_bar = format!(
             "{SAVE_CURSOR}\
-             {CSI}23;1{CURSOR_POSITION}{ERASE_LINE}{CSI}24;1{CURSOR_POSITION}{ERASE_LINE}\
+             {CSI}22;1{CURSOR_POSITION}{ERASE_LINE}{CSI}23;1{CURSOR_POSITION}{ERASE_LINE}\
+             {CSI}24;1{CURSOR_POSITION}{ERASE_LINE}\
              {CSI}{SCROLL_REGION}{RESTORE_CURSOR}"
         );
         let without_bar = format!("{SAVE_CURSOR}{CSI}{SCROLL_REGION}{RESTORE_CURSOR}");
