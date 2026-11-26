@@ -35,6 +35,7 @@
 | **Animation** | A folder of frames played in order, plus an `anim.toml`. |
 | **Canvas** | The size every frame shares, in pixels. |
 | **Floor** | The pixel row the cat's feet stand on, the same in every frame. |
+| **Turn column** | The pixel column in the middle of the cat's body. The cat turns around it. |
 | **Step** | How far the cat moves along the bar each frame, in pixels. |
 | **Bones** | Handles added to the drawing in Blender, so the cat can be posed instead of redrawn. |
 | **Action** | Blender's name for one animation, such as the walk. |
@@ -65,13 +66,16 @@ flowchart LR
 | Frames are named `00.png`, `01.png` & so on, with no gaps. | Meowsh plays them in that order. |
 | Keep the canvas small. | Every change sends a whole picture. Smaller pictures send faster. |
 
-* The canvas size & floor are set once in `assets/animations/canvas.toml`:
+* The canvas size, floor & turn column are set once in `assets/animations/canvas.toml`:
 
 ```toml
 width = 309
 height = 215
 floor = 204
+turn_x = 138
 ```
+
+* `turn_x` is the middle of the cat's body. Meowsh turns the cat around that column, so it turns in place instead of jumping sideways.
 
 * Meowsh scales this to fit the three row bar.
 
@@ -93,7 +97,7 @@ assets/
 │   ├── ...
 │   └── props.blend         the bowl & the ball
 └── animations/
-    ├── canvas.toml         the shared size & floor
+    ├── canvas.toml         the shared size, floor & turn column
     ├── sit/
     │   ├── anim.toml
     │   ├── 00.png

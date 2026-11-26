@@ -4,3 +4,6 @@ height = 215
 
 # the pixel row the cat's feet stand on, the same in every frame
 floor = 204
+
+# the pixel column the cat turns around: the middle of its body, so it turns in place
+turn_x = 138

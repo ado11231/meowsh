@@ -30,13 +30,15 @@ const BYTES_PER_PIXEL: usize = 4;
 /// Where the "how see through" byte sits in each pixel.
 const ALPHA_INDEX: usize = 3;
 
-/// `canvas.toml`: the size every frame shares & the row the feet stand on.
+/// `canvas.toml`: the size every frame shares, the row the feet stand on & the column the
+/// cat turns around.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CanvasSettings {
     width: u32,
     height: u32,
     floor: u32,
+    turn_x: u32,
 }
 
 /// One animation's `anim.toml`. Defaults match the table in docs/ANIMATION.md.
@@ -103,6 +105,11 @@ fn read_canvas(path: &Path) -> Result<CanvasSettings> {
     ensure!(
         canvas.floor < canvas.height,
         "{}: floor must be a row inside the height",
+        path.display()
+    );
+    ensure!(
+        canvas.turn_x < canvas.width,
+        "{}: turn_x must be a column inside the width",
         path.display()
     );
     Ok(canvas)
@@ -277,8 +284,8 @@ fn write_rust(canvas: &CanvasSettings, animations: &[FoundAnimation]) -> Result<
     let mut rust = String::new();
     writeln!(
         rust,
-        "pub const CANVAS: Canvas = Canvas {{ width: {}, height: {}, floor: {} }};",
-        canvas.width, canvas.height, canvas.floor
+        "pub const CANVAS: Canvas = Canvas {{ width: {}, height: {}, floor: {}, turn_x: {} }};",
+        canvas.width, canvas.height, canvas.floor, canvas.turn_x
     )?;
     writeln!(rust, "pub const ANIMATIONS: &[Animation] = &[")?;
     for FoundAnimation {

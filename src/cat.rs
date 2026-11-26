@@ -40,8 +40,20 @@ const PLAY_ANIMATION: &str = "play";
 /// The animation the cat runs with. Until it is drawn, the cat walks.
 const RUN_ANIMATION: &str = "run";
 
+/// How far right a left facing picture is drawn from a right facing one at the same spot,
+/// so the cat turns around `CANVAS.turn_x` instead of the middle of the canvas. Below 0, it
+/// is drawn further left.
+const LEFT_FACING_SHIFT: i64 = 2 * CANVAS.turn_x as i64 - (CANVAS.width as i64 - 1);
+
+/// The furthest left the cat goes, so a left facing picture never starts left of the bar.
+const LEFT_END: u32 = if LEFT_FACING_SHIFT < 0 {
+    LEFT_FACING_SHIFT.unsigned_abs() as u32
+} else {
+    0
+};
+
 /// The cat's home spot, where it eats & sleeps: the left end of the bar.
-const HOME_X: u32 = 0;
+const HOME_X: u32 = LEFT_END;
 
 /// How long a meal lasts on the cat's clock, in seconds, from when it gets home.
 const MEAL_SECONDS: u64 = 5 * 60;
@@ -157,7 +169,7 @@ impl Cat {
             animations,
             schedule,
             mode: free_time(animations, Duration::ZERO),
-            x: 0,
+            x: HOME_X,
             facing: Facing::Right,
             last_meal: None,
             rng: Rng::with_seed(seed),
@@ -168,7 +180,8 @@ impl Cat {
     /// be in the bar.
     pub fn update(&mut self, time: Time, bar_width: u32) -> Scene {
         // The furthest right the cat's left edge can be, with the whole cat in the bar.
-        let right_end = bar_width.saturating_sub(CANVAS.width);
+        // In a bar too narrow for that, it stays at the left end.
+        let right_end = bar_width.saturating_sub(CANVAS.width).max(LEFT_END);
         let now = time.since_start;
         self.pick_mode(time);
         self.pick_rest(now, right_end);
@@ -183,7 +196,7 @@ impl Cat {
             Mode::Free(Rest::Staying { player, .. })
             | Mode::Eating { player, .. }
             | Mode::Sleeping(player) => {
-                self.x = self.x.min(right_end);
+                self.x = self.x.clamp(LEFT_END, right_end);
                 (player.animation(), player.at(now).frame)
             }
         };
@@ -191,7 +204,7 @@ impl Cat {
             pictures: vec![ScenePicture {
                 animation: animation.name,
                 frame,
-                x: self.x,
+                x: self.picture_x(),
                 facing: self.facing,
             }],
         }
@@ -299,25 +312,38 @@ impl Cat {
         if !done {
             return;
         }
-        let from = self.x.min(right_end);
+        let from = self.x.clamp(LEFT_END, right_end);
         let rest = match action::pick(&mut self.rng) {
             Action::Sit => self.stay(self.animations.sit, now),
             Action::Play => self.stay(self.animations.play, now),
             Action::Walk => {
-                let to = self.rng.u32(0..=right_end);
+                let to = self.rng.u32(LEFT_END..=right_end);
                 Rest::Moving(Walk::start(self.animations.walk, from, to, now))
             }
             Action::Run => {
                 // A dash to whichever end is further away.
-                let to = if from < right_end - from {
+                let to = if from - LEFT_END < right_end - from {
                     right_end
                 } else {
-                    0
+                    LEFT_END
                 };
                 Rest::Moving(Walk::start(self.animations.run, from, to, now))
             }
         };
         self.mode = Mode::Free(rest);
+    }
+
+    /// Where the cat's picture starts: at its spot facing right, or shifted facing left, so
+    /// it turns in place.
+    fn picture_x(&self) -> u32 {
+        match self.facing {
+            Facing::Right => self.x,
+            Facing::Left => {
+                let x = i64::from(self.x) + LEFT_FACING_SHIFT;
+                // The cat stays right of `LEFT_END`, so this is never below 0.
+                u32::try_from(x).unwrap_or(0)
+            }
+        }
     }
 
     /// Sitting or playing where the cat is, for a while.
@@ -411,10 +437,29 @@ mod tests {
         let mut cat = cat()?;
         update(&mut cat, time(MORNING, 0), BAR_WIDTH)?;
 
-        let picture = update(&mut cat, time(MORNING, 1), CANVAS.width + 30)?;
+        let picture = update(&mut cat, time(MORNING, 1), CANVAS.width + 60)?;
+        assert!((LEFT_END..=60).contains(&cat.x), "the cat is at {}", cat.x);
+        assert!(
+            picture.x <= 60,
+            "the picture starts at {}, past 60",
+            picture.x
+        );
 
-        assert!(picture.x <= 30, "the cat is at {}, past 30", picture.x);
-        assert_eq!(update(&mut cat, time(MORNING, 2), 10)?.x, 0);
+        update(&mut cat, time(MORNING, 2), 10)?;
+        assert_eq!(cat.x, LEFT_END);
+        Ok(())
+    }
+
+    #[test]
+    fn facing_left_the_picture_shifts_so_the_cat_turns_in_place() -> Result<()> {
+        let mut cat = cat()?;
+        cat.facing = Facing::Left;
+
+        cat.x = 100;
+        assert_eq!(i64::from(cat.picture_x()), 100 + LEFT_FACING_SHIFT);
+        // At the left end, the picture starts right at the bar's edge.
+        cat.x = LEFT_END;
+        assert_eq!(cat.picture_x(), 0);
         Ok(())
     }
 
