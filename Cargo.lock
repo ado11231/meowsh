@@ -446,6 +446,7 @@ dependencies = [
  "crossterm",
  "directories",
  "fastrand",
+ "flate2",
  "jiff",
  "libc",
  "png",

@@ -9,6 +9,9 @@ use super::escape::{PICTURE_START, STRING_END};
 use anyhow::{Context, Result, ensure};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use flate2::Compression;
+use flate2::write::ZlibEncoder;
+use std::io::Write;
 
 /// The most base64 bytes one code may carry. Longer pictures are split over several codes.
 /// It is a multiple of 4, so every piece is whole base64.
@@ -34,6 +37,10 @@ const REMOVE_PLACEMENT: &str = "a=d,d=i";
 
 /// The pixels are 8 bit RGBA.
 const RGBA_FORMAT: &str = "f=32";
+
+/// The pixels are packed with zlib. Frames are mostly see through, so this makes them
+/// many times smaller to send.
+const ZLIB_PACKED: &str = "o=z";
 
 /// The terminal never answers, not even with errors.
 const NO_ANSWER: &str = "q=2";
@@ -61,7 +68,7 @@ pub struct Pixels<'a> {
 /// Where & how big a picture is shown, starting at the cell the cursor is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Placement {
-    /// How many columns the picture is stretched over.
+    /// How many columns the picture is stretched over. Only used when drawing in the cells.
     pub columns: u16,
     /// How many rows the picture is stretched over.
     pub rows: u16,
@@ -72,35 +79,46 @@ pub struct Placement {
 
 /// The codes that show `pixels` as picture number `id` at the cursor, as `placement` says.
 pub fn show_codes(id: u32, pixels: Pixels<'_>, placement: Placement) -> Result<String> {
+    check_size(pixels)?;
     let settings = format!(
         "{SEND_AND_SHOW},{RGBA_FORMAT},s={},v={},i={id},c={},r={},X={},{KEEP_CURSOR},{NO_ANSWER}",
         pixels.width, pixels.height, placement.columns, placement.rows, placement.offset_x
     );
-    pixel_codes(&settings, pixels)
+    data_codes(&settings, pixels.rgba)
 }
 
-/// The codes that send `pixels` as picture number `id` without showing it. Sending is most
-/// of the work, so it can happen before the cursor moves to the bar, & `place_code` then
-/// shows it at once.
+/// The codes that send `pixels` as picture number `id` without showing it, packed with
+/// zlib. Sending is most of the work, so it can happen before the cursor moves to the bar,
+/// & `place_code` then shows it at once.
 pub fn send_codes(id: u32, pixels: Pixels<'_>) -> Result<String> {
+    check_size(pixels)?;
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(pixels.rgba)
+        .context("could not pack a picture")?;
+    let packed = encoder.finish().context("could not pack a picture")?;
     let settings = format!(
-        "{SEND_ONLY},{RGBA_FORMAT},s={},v={},i={id},{NO_ANSWER}",
+        "{SEND_ONLY},{RGBA_FORMAT},{ZLIB_PACKED},s={},v={},i={id},{NO_ANSWER}",
         pixels.width, pixels.height
     );
-    pixel_codes(&settings, pixels)
+    data_codes(&settings, &packed)
 }
 
 /// The code that shows picture number `id`, sent before by `send_codes`, at the cursor.
 /// Placing it again with the same `placement_id` moves it instead of adding a second copy.
+///
+/// Only the rows are given. kitty then keeps the picture's shape & moves the whole picture
+/// by the offset. Given the columns too, it pins the right edge to the last column &
+/// squeezes the picture as the offset grows.
 pub fn place_code(id: u32, placement_id: u32, placement: Placement) -> String {
     format!(
-        "{PICTURE_START}{PLACE},i={id},p={placement_id},c={},r={},X={},{KEEP_CURSOR},{NO_ANSWER}{STRING_END}",
-        placement.columns, placement.rows, placement.offset_x
+        "{PICTURE_START}{PLACE},i={id},p={placement_id},r={},X={},{KEEP_CURSOR},{NO_ANSWER}{STRING_END}",
+        placement.rows, placement.offset_x
     )
 }
 
-/// The codes that carry `pixels`, with `settings` in the first one.
-fn pixel_codes(settings: &str, pixels: Pixels<'_>) -> Result<String> {
+/// Checks that `pixels` has as many bytes as its size says.
+fn check_size(pixels: Pixels<'_>) -> Result<()> {
     let expected_length = u64::from(pixels.width) * u64::from(pixels.height) * BYTES_PER_PIXEL;
     ensure!(
         u64::try_from(pixels.rgba.len()) == Ok(expected_length),
@@ -109,7 +127,12 @@ fn pixel_codes(settings: &str, pixels: Pixels<'_>) -> Result<String> {
         pixels.height,
         pixels.rgba.len()
     );
-    let data = BASE64.encode(pixels.rgba);
+    Ok(())
+}
+
+/// The codes that carry `data`, with `settings` in the first one.
+fn data_codes(settings: &str, data: &[u8]) -> Result<String> {
+    let data = BASE64.encode(data);
     let pieces: Vec<&[u8]> = data.as_bytes().chunks(MAX_CODE_DATA).collect();
     let mut codes = String::new();
     for (index, piece) in pieces.iter().enumerate() {
@@ -148,6 +171,8 @@ pub fn remove_placement_code(id: u32, placement_id: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::read::ZlibDecoder;
+    use std::io::Read;
 
     const PLACEMENT: Placement = Placement {
         columns: 6,
@@ -222,16 +247,15 @@ mod tests {
 
         let sent = send_codes(9, pixels)?;
 
-        assert_eq!(
-            sent,
-            format!(
-                "{PICTURE_START}a=t,f=32,s=2,v=1,i=9,q=2,m=0;{}{STRING_END}",
-                BASE64.encode(rgba)
-            )
-        );
+        let pieces = pieces(&sent);
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].0, "a=t,f=32,o=z,s=2,v=1,i=9,q=2,m=0");
+        let mut unpacked = Vec::new();
+        ZlibDecoder::new(BASE64.decode(pieces[0].1)?.as_slice()).read_to_end(&mut unpacked)?;
+        assert_eq!(unpacked, rgba);
         assert_eq!(
             place_code(9, 1, PLACEMENT),
-            format!("{PICTURE_START}a=p,i=9,p=1,c=6,r=2,X=3,C=1,q=2{STRING_END}")
+            format!("{PICTURE_START}a=p,i=9,p=1,r=2,X=3,C=1,q=2{STRING_END}")
         );
         Ok(())
     }

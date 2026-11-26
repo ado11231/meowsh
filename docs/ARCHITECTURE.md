@@ -358,6 +358,7 @@ flowchart TD
 | VS Code burns pictures into the cells, so removing one by its number leaves a trail. | Use the in the cells way in VS Code. See [The Painter](#the-painter). |
 | kitty removes pictures when the screen is cleared or reset. | Send the frames again & draw after any clear. |
 | Smooth movement needs steps smaller than one character. | Shift the picture inside a character cell. Works in kitty & VS Code. |
+| kitty squeezes a picture shifted inside a cell when it is told the columns too. | In kitty, give only the rows, so it keeps the picture's shape. |
 | Big frames are slow to send. | Send each frame once in kitty & keep frames small. See [ANIMATION.md](ANIMATION.md#frame-rules). |
 | Coding agents redraw the screen often. | Draw the bar again after any output that could have touched it. |
 | Drawing while a program is mid redraw can tear the screen. | Wait for it to finish. |
